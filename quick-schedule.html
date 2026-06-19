@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>快速排班</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%234366f4'/><path d='M30 52 L44 66 L72 36' stroke='white' stroke-width='10' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; padding: 16px; min-height: 100vh; }
+    h1 { font-size: 20px; margin-bottom: 16px; color: #1a3e6f; text-align: center; }
+    .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.05); }
+    .card label { display: block; font-size: 13px; color: #666; margin-bottom: 4px; }
+    .card select, .card input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #d0d7e2; border-radius: 8px; margin-bottom: 12px; outline: none; -webkit-appearance: none; background: #fff; }
+    .card select:focus, .card input:focus { border-color: #4366f4; }
+    .row { display: flex; gap: 10px; }
+    .row > * { flex: 1; }
+    .btn { display: block; width: 100%; padding: 16px; font-size: 18px; font-weight: 700; color: #fff; background: #4366f4; border: none; border-radius: 12px; cursor: pointer; margin-top: 4px; }
+    .btn:active { background: #2a4fd4; }
+    .btn:disabled { background: #b0bec5; }
+    .btn-outline { background: #fff; color: #4366f4; border: 1px solid #4366f4; padding: 12px; font-size: 14px; }
+    .preset-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .preset { padding: 8px 14px; font-size: 13px; border: 1px solid #d0d7e2; border-radius: 20px; background: #fff; color: #4366f4; cursor: pointer; white-space: nowrap; }
+    .preset:active { background: #e8f0fe; }
+    .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); padding: 12px 24px; border-radius: 10px; font-size: 15px; z-index: 999; display: none; }
+    .toast.ok { background: #e6f7ed; color: #1a7a3a; }
+    .toast.err { background: #fdecea; color: #d94e4e; }
+    .result-card { background: #e8f0fe; border-radius: 12px; padding: 16px; margin-top: 12px; text-align: center; display: none; }
+    .result-card .loc { font-size: 22px; font-weight: 700; color: #1a3e6f; }
+    .result-card .time { font-size: 14px; color: #5b6f82; margin-top: 4px; }
+    .login-err { color: #d94e4e; font-size: 13px; margin-top: 8px; display: none; }
+    .user-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 14px; color: #666; }
+    .user-bar .name { color: #1a3e6f; font-weight: 600; }
+  </style>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={corePlugins:{preflight:false}}</script>
+</head>
+<body>
+  <h1>移岗</h1>
+
+  <!-- 登录 -->
+  <div class="card" id="loginCard">
+    <label>账号</label>
+    <input type="text" id="loginUser" placeholder="留空为超级管理员登录">
+    <label>密码</label>
+    <input type="password" id="loginPwd" placeholder="输入密码">
+    <p class="login-err" id="loginErr"></p>
+    <button class="btn" onclick="doLogin()">登录</button>
+  </div>
+
+  <!-- 主界面 -->
+  <div id="mainBox" style="display:none">
+    <div class="user-bar">
+      <span class="name" id="userName"></span>
+      <button class="btn-outline" onclick="doLogout()" style="width:auto;padding:6px 14px">退出</button>
+    </div>
+    <!-- 公共：门店+员工 -->
+    <div class="card">
+      <label>门店</label>
+      <select id="storeSelect"><option value="">加载中...</option></select>
+    </div>
+    <div class="card">
+      <label>员工</label>
+      <select id="staffSelect"><option value="">请先选门店</option></select>
+    </div>
+    <div class="card">
+      <label>今日记录</label>
+      <div id="currentLoc" style="padding:8px 0;font-size:14px;color:#666;min-height:40px">请先选择员工</div>
+    </div>
+    <div class="card">
+      <label>新点位</label>
+      <select id="newLocSelect"><option value="">选择新点位</option></select>
+    </div>
+    <button class="btn" id="transferBtn" onclick="doTransfer()" style="background:#e65100">确认移岗</button>
+    <div class="result-card" id="transferResult" style="background:#fff3e0">
+      <div class="loc" id="transferLoc" style="color:#e65100"></div>
+      <div class="time" id="transferTime"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="js/supabase.min.js"></script>
+  <script src="js/config.js"></script>
+  <script>
+    var gAdminStoreId = '', gAdminName = '', gIsSuper = false;
+    var gAdminModules = [], gAdminStoreIds = [];
+    var stores = [], roster = [], locations = [];
+    var today = new Date().toISOString().split('T')[0];
+
+    function getDefaultPwd() { return 'admin123'; }
+    function parseJson(v) { if (!v) return []; try { return typeof v==='string'?JSON.parse(v):v; } catch(e) { return []; } }
+    function fmtTime(d) { if (!d) return '--'; return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
+
+    function hasStore(sid) {
+      if (gIsSuper) return true;
+      if (!gAdminStoreIds.length) return String(gAdminStoreId) === String(sid);
+      return gAdminStoreIds.map(String).indexOf(String(sid)) !== -1;
+    }
+
+    // 检查已有登录态
+    var saved = sessionStorage.getItem('qs-login');
+    if (saved) {
+      try { var d = JSON.parse(saved);
+        gAdminStoreId = d.sid || ''; gAdminName = d.name || ''; gIsSuper = d.super || false;
+        gAdminModules = d.mods || []; gAdminStoreIds = d.sids || [];
+        showMain();
+      } catch(e) {}
+    }
+
+    function doLogin() {
+      var user = document.getElementById('loginUser').value.trim();
+      var pwd = document.getElementById('loginPwd').value.trim();
+      if (!pwd) return;
+      var errEl = document.getElementById('loginErr');
+
+      // 查全局密码
+      db.from('app_config').select('admin_password').limit(1).single().then(function(r) {
+        var globalPwd = (r.data && r.data.admin_password) || getDefaultPwd();
+        if (pwd === globalPwd && !user) {
+          gIsSuper = true; gAdminName = '超级管理员'; gAdminModules = []; gAdminStoreIds = [];
+          saveLogin(); showMain(); return Promise.reject('done');
+        }
+        if (!user) { errEl.textContent = '密码错误'; errEl.style.display = ''; return Promise.reject('done'); }
+        // 查门店管理员
+        return db.from('admin_user').select('*').eq('username', user).single();
+      }).then(function(r) {
+        if (r === 'done') return;
+        if (r.error || !r.data) { errEl.textContent = '账号不存在'; errEl.style.display = ''; return; }
+        if (r.data.disabled) { errEl.textContent = '该账号已被禁用'; errEl.style.display = ''; return; }
+        if (r.data.password !== pwd) { errEl.textContent = '密码错误'; errEl.style.display = ''; return; }
+        gAdminStoreId = r.data.store_id || '';
+        gAdminName = r.data.name || '';
+        gIsSuper = false;
+        gAdminModules = parseJson(r.data['模块权限']);
+        gAdminStoreIds = parseJson(r.data['门店权限']);
+        saveLogin(); showMain();
+      }).catch(function(e) { if (e !== 'done') { errEl.textContent = '登录失败'; errEl.style.display = ''; } });
+    }
+
+    function saveLogin() {
+      sessionStorage.setItem('qs-login', JSON.stringify({
+        sid: gAdminStoreId, name: gAdminName, super: gIsSuper,
+        mods: gAdminModules, sids: gAdminStoreIds
+      }));
+    }
+
+    function showMain() {
+      document.getElementById('loginCard').style.display = 'none';
+      document.getElementById('mainBox').style.display = '';
+      document.getElementById('userName').textContent = gAdminName + (gIsSuper ? ' (超级管理员)' : '');
+      loadStores();
+    }
+
+    function doLogout() {
+      sessionStorage.removeItem('qs-login');
+      location.reload();
+    }
+
+    function loadStores() {
+      db.from('store').select('*').order('store_id').then(function(r) {
+        stores = (r.data || []).filter(function(s) { return s.store_id !== 'unassigned' && hasStore(s.store_id); });
+        var sel = document.getElementById('storeSelect');
+        sel.innerHTML = '<option value="">选择门店</option>' + stores.map(function(s) {
+          return '<option value="' + s.store_id + '">' + s.name + '</option>';
+        }).join('');
+        sel.onchange = function() { loadStaff(); loadNewLocations(); };
+        if (stores.length === 1) { sel.value = stores[0].store_id; loadStaff(); loadNewLocations(); }
+      });
+    }
+
+    function loadStaff() {
+      var sid = document.getElementById('storeSelect').value;
+      var sel = document.getElementById('staffSelect');
+      if (!sid) { sel.innerHTML = '<option value="">请先选门店</option>'; return; }
+      sel.innerHTML = '<option value="">加载中...</option>';
+      db.from('roster').select('name,phone').eq('store_id', sid).order('name').then(function(r) {
+        if (r.error) throw r.error;
+        roster = r.data || [];
+        if (roster.length === 0) {
+          sel.innerHTML = '<option value="">该门店暂无员工</option>';
+        } else {
+          sel.innerHTML = '<option value="">选择员工</option>' + roster.map(function(s, i) {
+            return '<option value="' + i + '">' + s.name + ' (' + (s.phone||'').slice(-4) + ')</option>';
+          }).join('');
+        }
+        // 员工选中时触发当前位置查询
+        sel.onchange = function() { loadCurrentPosition(); };
+      }).catch(function(e) {
+        sel.innerHTML = '<option value="">加载失败: ' + (e.message || '网络错误') + '</option>';
+      });
+    }
+
+    function toast(msg, ok) {
+      var el = document.getElementById('toast');
+      el.textContent = msg; el.className = 'toast ' + (ok ? 'ok' : 'err');
+      el.style.display = 'block';
+      setTimeout(function() { el.style.display = 'none'; }, 2500);
+    }
+
+    // ====== 移岗 ======
+    function loadCurrentPosition() {
+      var sid = document.getElementById('storeSelect').value;
+      var si = document.getElementById('staffSelect').value;
+      var el = document.getElementById('currentLoc');
+      if (!sid || si === '') { el.textContent = '请先选择门店和员工'; return; }
+      var staff = roster[parseInt(si)];
+      if (!staff) return;
+      el.innerHTML = '<div style="color:#999;text-align:center">查询中...</div>';
+
+      // 1. 查今日所有打卡记录
+      db.from('check_record').select('*').eq('store_id', sid).eq('phone', staff.phone).eq('date', today).order('check_in').then(function(r) {
+        var records = r.data || [];
+        var html = '';
+        // 打卡记录
+        if (records.length > 0) {
+          html += '<div style="font-weight:600;font-size:13px;color:#1a3e6f;margin-bottom:6px">打卡记录</div>';
+          records.forEach(function(rec, i) {
+            var isActive = !rec.check_out;
+            var ci = new Date(rec.check_in), co = rec.check_out ? new Date(rec.check_out) : null;
+            html += '<div style="padding:6px 0;font-size:13px;border-bottom:1px solid #f0f0f0">';
+            html += '<span style="font-weight:600">' + (rec.location || '--') + '</span> ';
+            html += fmtTime(ci) + ' ~ ' + (co ? fmtTime(co) : '<span style="color:#e65100;font-weight:700">● 在岗中</span>');
+            if (rec.shift_type === '移岗') {
+              html += ' <span style="background:#e65100;color:#fff;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px">移岗</span>';
+            }
+            html += '</div>';
+          });
+        }
+        // 2. 查排班数据
+        var store = stores.find(function(s) { return s.store_id === sid; });
+        var storeName = store ? (store.schedule_store_name || store.name) : '';
+        return fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/schedule?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey) + '&date=' + today + '&storeName=' + encodeURIComponent(storeName), { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r) { return r.json(); }).then(function(data) {
+          var schedHtml = '';
+          (data.stores||[]).forEach(function(s) {
+            (s.locations||[]).forEach(function(loc) {
+              (loc.staff||[]).forEach(function(st) {
+                if (String(st.phone) === String(staff.phone)) {
+                  schedHtml += '<div style="padding:6px 0;font-size:13px;border-bottom:1px solid #f0f0f0">';
+                  schedHtml += '<span style="font-weight:600">' + loc.location + '</span> ';
+                  schedHtml += st.timeIn + ' ~ ' + st.timeOut;
+                  schedHtml += ' <span style="font-size:11px;color:#999">(' + st.shiftType + ')</span>';
+                  schedHtml += '</div>';
+                }
+              });
+            });
+          });
+          if (schedHtml) {
+            html += '<div style="font-weight:600;font-size:13px;color:#1a3e6f;margin:8px 0 6px">排班记录</div>' + schedHtml;
+          }
+          if (!html) html = '<div style="color:#999;text-align:center">今日无记录</div>';
+          el.innerHTML = html;
+        }).catch(function() {
+          if (!html) html = '<div style="color:#999;text-align:center">今日无记录</div>';
+          el.innerHTML = html;
+        });
+      }).catch(function() { el.innerHTML = '<div style="color:#d94e4e;text-align:center">查询失败</div>'; });
+    }
+
+    function loadNewLocations() {
+      var sel = document.getElementById('newLocSelect');
+      var defaults = ['讲解','收银','库管','文员','自采小吃','伴手礼','特色食品','外食罐头','桂发祥','冷食冷饮','益德成','剪纸','茶叶','手工艺品','特色熟食','击鼓'];
+      if (locations.length) {
+        sel.innerHTML = '<option value="">选择新点位</option>' + locations.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
+      } else {
+        sel.innerHTML = '<option value="">选择新点位</option>' + defaults.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
+      }
+    }
+
+    function doTransfer() {
+      var sid = document.getElementById('storeSelect').value;
+      var si = document.getElementById('staffSelect').value;
+      var newLoc = document.getElementById('newLocSelect').value;
+      if (!sid || si === '') { toast('请选择门店和员工', false); return; }
+      if (!newLoc) { toast('请选择新点位', false); return; }
+      if (!hasStore(sid)) { toast('无权操作该门店', false); return; }
+
+      var staff = roster[parseInt(si)];
+      var store = stores.find(function(s) { return s.store_id === sid; });
+      var storeName = store ? (store.schedule_store_name || store.name) : '';
+      var now = new Date();
+      var btn = document.getElementById('transferBtn');
+      btn.disabled = true; btn.textContent = '处理中...';
+
+      // 1. 检查当前活跃打卡记录
+      db.from('check_record').select('*').eq('store_id', sid).eq('phone', staff.phone).eq('date', today).is('check_out', null).limit(1).then(function(active) {
+        if (!active.data || !active.data.length) {
+          toast('该员工当前未在岗，无法移岗', false);
+          btn.disabled = false; btn.textContent = '确认移岗';
+          return Promise.reject('not-active');
+        }
+        var rec = active.data[0];
+        var onDutyMs = now.getTime() - new Date(rec.check_in).getTime();
+        if (onDutyMs < 30 * 60 * 1000) {
+          var remainMin = 30 - Math.floor(onDutyMs / 60000);
+          toast('到岗不足30分钟，请等待' + remainMin + '分钟后再移岗', false);
+          btn.disabled = false; btn.textContent = '确认移岗';
+          return Promise.reject('too-early');
+        }
+        // 关闭旧记录，标记为移岗
+        return db.from('check_record').update({ check_out: now.toISOString(), scheduled_check_out: rec.scheduled_check_out || now.toISOString(), shift_type: '移岗', _sync_origin: 'local', _sync_ts: now.toISOString() }).eq('id', rec.id);
+      }).then(function() {
+        // 2. 创建新点位打卡记录（移岗）
+        return db.from('check_record').insert({
+          store_id: sid, name: staff.name, phone: staff.phone,
+          check_in: now.toISOString(), date: today,
+          scheduled_check_in: rec.scheduled_check_in || now.toISOString(),
+          scheduled_check_out: rec.scheduled_check_out || null,
+          location: newLoc, shift_type: '移岗',
+          _sync_origin: 'local', _sync_ts: now.toISOString()
+        });
+      }).then(function() {
+        // 3. 调用项目系统移岗 API
+        return fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/transfer?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+          body: JSON.stringify({ storeName: storeName, name: staff.name, phone: staff.phone, date: today, newLocation: newLoc })
+        });
+      }).then(function(r) { return r.json(); }).then(function(d) {
+        btn.disabled = false; btn.textContent = '确认移岗';
+        if (d.success) {
+          toast('移岗成功！新点位：' + newLoc, true);
+          document.getElementById('transferLoc').textContent = staff.name + ' → ' + newLoc;
+          document.getElementById('transferTime').textContent = fmtTime(now) + ' 开始在新点位在岗';
+          document.getElementById('transferResult').style.display = '';
+          loadCurrentPosition();
+        } else {
+          toast((d.message || '操作失败'), false);
+        }
+      }).catch(function(e) {
+        btn.disabled = false; btn.textContent = '确认移岗';
+        if (e === 'too-early' || e === 'not-active') return;
+        toast('网络错误，请重试', false);
+      });
+    }
+
+  </script>
+</body>
+</html>

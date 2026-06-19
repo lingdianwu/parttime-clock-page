@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' style='stop-color:%234366f4'/><stop offset='100%25' style='stop-color:%231a56e8'/></linearGradient></defs><rect width='100' height='100' rx='24' fill='url(%23g)'/><path d='M30 52 L44 66 L72 36' stroke='white' stroke-width='10' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>门店定位采集</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={corePlugins:{preflight:false}}</script>
+  <style>
+    .locate-page { max-width: 480px; margin: 0 auto; padding: 30px 20px; text-align: center; }
+    .locate-page h1 { font-size: 22px; margin-bottom: 8px; }
+    .locate-page .sub { color: #888; font-size: 14px; margin-bottom: 30px; }
+    .locate-card { background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 20px; }
+    .locate-card .coord { font-size: 28px; font-weight: 700; color: #4a90d9; margin: 12px 0; word-break: break-all; }
+    .locate-card .acc { font-size: 13px; color: #999; }
+    .locate-card select { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #d0d7e2; border-radius: 10px; margin: 12px 0; outline: none; }
+    .locate-card input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #d0d7e2; border-radius: 10px; margin: 8px 0; outline: none; text-align: center; }
+    .locate-card button { width: 100%; padding: 16px; font-size: 18px; font-weight: 600; background: #4a90d9; color: #fff; border: none; border-radius: 12px; cursor: pointer; margin-top: 8px; }
+    .locate-card button:disabled { background: #bbb; cursor: not-allowed; }
+    .locate-card .done { font-size: 40px; margin: 20px 0; }
+    .locate-card .divider { border-top: 1px dashed #e0e0e0; margin: 20px 0; padding-top: 8px; color: #999; font-size: 13px; }
+    .locate-card .link-btn { display: block; padding: 10px; margin: 6px 0; background: #f0f4ff; color: #4a90d9; text-decoration: none; border-radius: 8px; font-size: 14px; }
+  </style>
+</head>
+<body class="locate-page">
+
+  <h1>门店定位采集</h1>
+  <p class="sub">用手机在门店门口打开此页面</p>
+
+  <div class="locate-card" id="step1">
+    <p style="color:#888;margin-bottom:8px">自动获取GPS坐标</p>
+    <div class="coord" id="coordText">点击下方按钮获取</div>
+    <div class="acc" id="accText"></div>
+    <button id="gpsBtn" onclick="getLocation()">📍 获取定位</button>
+    <p style="font-size:12px;color:#999;margin-top:8px">⚠️ 仅手机可用，需允许定位权限</p>
+    <div class="divider">或手动输入坐标</div>
+    <input type="text" id="manualLat" placeholder="纬度（如 39.9042）">
+    <input type="text" id="manualLng" placeholder="经度（如 116.4074）">
+    <p style="font-size:12px;color:#888;margin-top:4px">
+      打开 <a href="https://map.baidu.com/" target="_blank" class="link-btn" style="display:inline;padding:4px 8px">百度地图</a>
+      或 <a href="https://ditu.amap.com/" target="_blank" class="link-btn" style="display:inline;padding:4px 8px">高德地图</a>
+      → 定位到门店 → 长按复制坐标 → 粘贴到上方
+    </p>
+  </div>
+
+  <div class="locate-card" id="step2" style="display:none">
+    <p style="color:#888">选择你所在的门店</p>
+    <select id="storeSelect"><option value="">请选择门店</option></select>
+    <input type="password" id="locPwd" placeholder="输入管理员密码确认提交" style="width:100%;padding:12px;font-size:16px;border:1px solid #d0d7e2;border-radius:10px;margin-top:12px;outline:none;text-align:center">
+    <p id="submitMsg" style="font-size:13px;margin-top:8px"></p>
+    <button id="submitBtn" onclick="submitLocation()">确认提交</button>
+  </div>
+
+  <div class="locate-card" id="step3" style="display:none">
+    <div class="done">✅</div>
+    <p style="font-size:18px;font-weight:600;color:#4caf50">提交成功！</p>
+    <p style="color:#888;margin-top:8px">管理员已收到此门店坐标</p>
+    <button onclick="resetForm()" style="margin-top:16px;opacity:0.85">提交另一个门店</button>
+  </div>
+
+  <script src="js/supabase.min.js"></script>
+  <script src="js/config.js"></script>
+  <script>
+  (function() {
+    var currentLat = null;
+    var currentLng = null;
+    function escHtml(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+    // 加载门店列表
+    db.from('store').select('store_id,name').order('store_id').then(function(r) {
+      if (r.error) return;
+      var stores = r.data || [];
+      document.getElementById('storeSelect').innerHTML =
+        '<option value="">请选择门店</option>' +
+        stores.map(function(s) {
+          return '<option value="' + s.store_id + '">' + escHtml(s.name) + '</option>';
+        }).join('');
+    });
+
+    // 手动输入变化时也启用提交
+    document.getElementById('manualLat').oninput = checkManual;
+    document.getElementById('manualLng').oninput = checkManual;
+
+    function checkManual() {
+      var lat = parseFloat(document.getElementById('manualLat').value.trim());
+      var lng = parseFloat(document.getElementById('manualLng').value.trim());
+      if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        currentLat = lat;
+        currentLng = lng;
+        document.getElementById('coordText').textContent = lat.toFixed(6) + ', ' + lng.toFixed(6);
+        document.getElementById('accText').textContent = '手动输入';
+        document.getElementById('step2').style.display = '';
+      }
+    }
+
+    window.getLocation = function() {
+      document.getElementById('coordText').textContent = '获取中...';
+      document.getElementById('accText').textContent = '';
+      document.getElementById('gpsBtn').disabled = true;
+      document.getElementById('gpsBtn').textContent = '正在定位...';
+
+      if (!navigator.geolocation) {
+        document.getElementById('coordText').textContent = '此浏览器不支持GPS定位，请使用手动输入';
+        document.getElementById('gpsBtn').disabled = false;
+        document.getElementById('gpsBtn').textContent = '📍 获取定位';
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(function(pos) {
+        currentLat = pos.coords.latitude;
+        currentLng = pos.coords.longitude;
+        document.getElementById('coordText').textContent = currentLat.toFixed(6) + ', ' + currentLng.toFixed(6);
+        document.getElementById('accText').textContent = 'GPS精度 ±' + Math.round(pos.coords.accuracy) + '米';
+        document.getElementById('gpsBtn').disabled = false;
+        document.getElementById('gpsBtn').textContent = '📍 重新获取定位';
+        document.getElementById('step2').style.display = '';
+      }, function(err) {
+        var msgs = {
+          1: '定位权限被拒绝 ❌（请在浏览器设置中允许定位，或使用手动输入）',
+          2: 'GPS信号不可用，请在室外开阔处重试，或使用手动输入',
+          3: '定位超时，请重试或使用手动输入'
+        };
+        document.getElementById('coordText').textContent = msgs[err.code] || ('定位失败 (错误码' + err.code + ')，请使用手动输入');
+        document.getElementById('accText').textContent = '错误码: ' + err.code;
+        document.getElementById('gpsBtn').disabled = false;
+        document.getElementById('gpsBtn').textContent = '📍 重新获取定位';
+      }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+    };
+
+    window.submitLocation = function() {
+      var storeId = document.getElementById('storeSelect').value;
+      var pwd = document.getElementById('locPwd').value.trim();
+      if (!storeId) { setMsg('请选择门店', 1); return; }
+      if (!currentLat) { setMsg('请先获取定位或手动输入坐标', 1); return; }
+      if (!pwd) { setMsg('请输入管理员密码', 1); return; }
+
+      document.getElementById('submitBtn').disabled = true;
+      setMsg('验证中...', 0);
+
+      db.from('app_config').select('admin_password').limit(1).single()
+        .then(function(r) {
+          if (r.error || !r.data || r.data.admin_password !== pwd) {
+            setMsg('密码错误', 1);
+            document.getElementById('submitBtn').disabled = false;
+            return Promise.reject('pwd');
+          }
+          setMsg('提交中...', 0);
+          return db.from('store').update({ lat: currentLat, lng: currentLng }).eq('store_id', storeId);
+        }).then(function(r) {
+          if (r === 'pwd') return;
+          if (r && r.error) throw r.error;
+          document.getElementById('step1').style.display = 'none';
+          document.getElementById('step2').style.display = 'none';
+          document.getElementById('step3').style.display = '';
+        }).catch(function(e) {
+          if (e !== 'pwd') {
+            document.getElementById('submitBtn').disabled = false;
+            setMsg('提交失败: ' + (e.message || '网络错误'), 1);
+          }
+        });
+    };
+
+    window.resetForm = function() {
+      currentLat = currentLng = null;
+      document.getElementById('step1').style.display = '';
+      document.getElementById('step2').style.display = 'none';
+      document.getElementById('step3').style.display = 'none';
+      document.getElementById('storeSelect').value = '';
+      document.getElementById('coordText').textContent = '点击下方按钮获取';
+      document.getElementById('accText').textContent = '';
+      document.getElementById('manualLat').value = '';
+      document.getElementById('manualLng').value = '';
+      document.getElementById('gpsBtn').disabled = false;
+      document.getElementById('gpsBtn').textContent = '📍 获取定位';
+      document.getElementById('submitBtn').disabled = false;
+    };
+
+    function setMsg(msg, isErr) {
+      var el = document.getElementById('submitMsg');
+      el.textContent = msg;
+      el.style.color = isErr ? '#f44336' : '#888';
+    }
+  })();
+  </script>
+</body>
+</html>

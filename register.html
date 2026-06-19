@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>加入花名册</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    body { max-width: 480px; margin: 0 auto; padding: 24px 16px; min-height: 100vh; }
+    .reg-card { background: #fff; border-radius: 16px; padding: 28px 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .reg-card h2 { font-size: 20px; font-weight: 700; color: #333; margin-bottom: 4px; text-align: center; }
+    .reg-card .sub { font-size: 13px; color: #999; text-align: center; margin-bottom: 24px; }
+    .reg-card label { display: block; font-size: 13px; font-weight: 600; color: #555; margin-bottom: 4px; margin-top: 14px; }
+    .reg-card select, .reg-card input { width: 100%; padding: 12px 14px; font-size: 15px; border: 1px solid #d0d7e2; border-radius: 10px; outline: none; box-sizing: border-box; background: #fafbfc; margin-top: 4px; }
+    .reg-card select:focus, .reg-card input:focus { border-color: var(--primary, #4a6cf7); }
+    .reg-card .btn { width: 100%; margin-top: 20px; padding: 14px; font-size: 16px; }
+    .reg-card .error { color: #f44336; font-size: 13px; margin-top: 8px; }
+    .reg-card .provider-tag { display: inline-block; background: #e8f5e9; color: #2e7d32; font-size: 13px; padding: 4px 12px; border-radius: 20px; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div class="reg-card" id="formCard">
+    <h2>加入花名册</h2>
+    <div class="sub" id="providerLabel">加载中...</div>
+    <label>选择门店</label>
+    <select id="regStore"><option value="">加载中...</option></select>
+    <label>姓名</label>
+    <input type="text" id="regName" placeholder="你的姓名">
+    <label>手机号</label>
+    <input type="tel" id="regPhone" placeholder="用于打卡登录" maxlength="11">
+    <p class="error" id="regError"></p>
+    <button class="btn-primary btn" id="regBtn" onclick="doRegister()">确认注册</button>
+  </div>
+  <div class="reg-card" id="doneCard" style="display:none;text-align:center">
+    <div style="font-size:48px;margin-bottom:8px">&#x2705;</div>
+    <h2>注册成功</h2>
+    <p style="color:#4caf50;margin-top:8px">你已加入花名册，可以扫码打卡了</p>
+  </div>
+
+  <script src="js/supabase.min.js"></script>
+  <script src="js/config.js"></script>
+  <script>
+  var _pid = (function() {
+    var s = location.search;
+    var m = s.match(/provider=(\d+)/);
+    return m ? m[1] : '';
+  })();
+
+  if (!_pid) {
+    document.getElementById('formCard').innerHTML = '<div style="text-align:center;padding:40px 0"><p style="color:#f44336;font-size:15px">请扫描正确的注册二维码</p></div>';
+  } else {
+    loadData();
+  }
+
+  function loadData() {
+    // 加载第三方信息
+    db.from('service_provider').select('*').eq('id', _pid).limit(1).maybeSingle()
+      .then(function(r) {
+        if (r.error || !r.data) {
+          document.getElementById('providerLabel').textContent = '第三方不存在';
+        } else {
+          document.getElementById('providerLabel').innerHTML = '<span class="provider-tag">' + esc(r.data.name) + '</span>';
+        }
+      });
+    // 加载门店列表
+    db.from('store').select('store_id,name').order('store_id')
+      .then(function(r) {
+        if (r.error || !r.data || !r.data.length) {
+          document.getElementById('regStore').innerHTML = '<option value="">暂无门店</option>';
+        } else {
+          document.getElementById('regStore').innerHTML = '<option value="">请选择门店</option>' +
+            r.data.map(function(s) { return '<option value="' + s.store_id + '">' + esc(s.name) + '</option>'; }).join('');
+        }
+      });
+  }
+
+  window.doRegister = function() {
+    var storeId = document.getElementById('regStore').value;
+    var name = document.getElementById('regName').value.trim();
+    var phone = document.getElementById('regPhone').value.trim();
+    var errEl = document.getElementById('regError');
+    errEl.textContent = '';
+    if (!storeId) { errEl.textContent = '请选择门店'; return; }
+    if (!name) { errEl.textContent = '请输入姓名'; return; }
+    if (!phone) { errEl.textContent = '请输入手机号'; return; }
+    if (!/^1\d{10}$/.test(phone)) { errEl.textContent = '手机号格式不正确'; return; }
+    var btn = document.getElementById('regBtn');
+    btn.disabled = true; btn.textContent = '注册中...';
+    // 步骤1: 检查手机号重复
+    db.from('roster').select('id').eq('store_id', storeId).eq('phone', phone).maybeSingle()
+      .then(function(r) {
+        if (r.data) { errEl.textContent = '该手机号在此门店已注册'; btn.disabled = false; btn.textContent = '确认注册'; return; }
+        // 步骤2: 检查同门店同姓名
+        return db.from('roster').select('id').eq('store_id', storeId).eq('name', name).maybeSingle().then(function(r2) {
+          if (r2.data) { errEl.textContent = '该姓名在此门店已存在'; btn.disabled = false; btn.textContent = '确认注册'; return; }
+          // 步骤3: 插入
+          return db.from('roster').insert({ store_id: storeId, name: name, phone: phone, provider_id: _pid }).then(function(r3) {
+            if (r3.error) { errEl.textContent = r3.error.message || '注册失败'; btn.disabled = false; btn.textContent = '确认注册'; return; }
+            document.getElementById('formCard').style.display = 'none';
+            document.getElementById('doneCard').style.display = '';
+            // 自动同步到排班系统
+            db.from('store').select('schedule_store_name').eq('store_id', storeId).single().then(function(sr) {
+              var schedName = (sr.data && sr.data.schedule_store_name) || '';
+              if (!schedName) return;
+              db.from('app_config').select('schedule_api_url,schedule_api_key').limit(1).single().then(function(cr) {
+                var apiUrl = (cr.data && cr.data.schedule_api_url) || SCHEDULE_CONFIG.apiUrl || '';
+                var apiKey = (cr.data && cr.data.schedule_api_key) || SCHEDULE_CONFIG.apiKey || '';
+                if (!apiUrl) return;
+                fetch(apiUrl + '/api/public/roster/sync?key=' + encodeURIComponent(apiKey), {
+                  method: 'POST', headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+                  body: JSON.stringify({ storeName: schedName, staff: [{ name: name, phone: phone, employmentType: '兼职' }] })
+                }).catch(function(){});
+              }).catch(function(){});
+            }).catch(function(){});
+          });
+        });
+      }).catch(function(e) {
+        btn.disabled = false; btn.textContent = '确认注册';
+        errEl.textContent = '网络错误: ' + (e.message || '请重试');
+      });
+  };
+
+  function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  </script>
+</body>
+</html>

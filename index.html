@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' style='stop-color:%234366f4'/><stop offset='100%25' style='stop-color:%231a56e8'/></linearGradient></defs><rect width='100' height='100' rx='24' fill='url(%23g)'/><path d='M30 52 L44 66 L72 36' stroke='white' stroke-width='10' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>兼职打卡</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={corePlugins:{preflight:false}}</script>
+</head>
+<body class="checkin-page">
+
+  <div class="store-header">
+    <div class="icon">📍</div>
+    <h1 id="storeName">加载中...</h1>
+    <div class="store-tag" id="storeTag"></div>
+    <div class="schedule-info-big" id="scheduleInfoBig" style="display:none;font-size:17px;color:#1a3e6f;margin-top:10px;padding:10px 16px;background:#e8f0fe;border-radius:10px;text-align:center">
+      <div>排班门店：<strong id="scheduleStoreDisplay"></strong></div>
+      <div id="locationDisplayBig" style="margin-top:4px;font-weight:700;font-size:18px;color:#e65100"></div>
+    </div>
+  </div>
+
+  <!-- 手机号输入 -->
+  <div class="phone-verify" id="phoneArea" style="display:none">
+    <h2>请输入你的手机号</h2>
+    <p class="hint">系统将自动识别你的身份</p>
+    <div class="phone-input-wrap">
+      <input type="tel" id="phoneInput" placeholder="输入11位手机号" maxlength="11" onkeydown="if(event.key==='Enter')doPhoneLogin()">
+      <button class="btn-primary" onclick="doPhoneLogin()" style="padding:14px 24px;font-size:16px;font-weight:600;white-space:nowrap">确认</button>
+    </div>
+    <p id="phoneError" style="color:#f44336;font-size:13px;margin-top:10px;display:none"></p>
+  </div>
+
+  <!-- 验证中 -->
+  <div class="phone-verify" id="verifyLoading" style="display:none">
+    <div class="loading"></div>
+    <p class="hint" id="verifyMsg">验证中...</p>
+  </div>
+
+  <!-- 打卡状态 -->
+  <div class="checkin-status" id="statusArea" style="display:none">
+    <div class="welcome-text">你好，<span class="name" id="empName"></span></div>
+    <div class="phone-display" id="phoneDisplay"></div>
+    <div class="status-badge" id="statusBadge"></div>
+    <div class="time-info" id="timeInfo"></div>
+  </div>
+
+  <!-- 操作按钮 -->
+  <div class="action-area" id="actionArea" style="display:none">
+    <button class="btn-checkin" id="btnCheckin" onclick="doCheckIn()">到岗签到</button>
+    <button class="btn-checkout" id="btnCheckout" onclick="doCheckOut()">离岗签退</button>
+    <button class="btn-change-name" id="btnChange" onclick="clearIdentity()">切换身份</button>
+  </div>
+
+  <div class="footer-info">兼职在岗打卡系统</div>
+
+  <!-- 扫码器浮层 -->
+  <div class="scanner-overlay" id="scannerOverlay" style="display:none">
+    <div class="scanner-box">
+      <div class="scanner-header">
+        <span>对准门店二维码</span>
+        <button class="scanner-close" onclick="stopScan()">✕</button>
+      </div>
+      <div id="qrReader"></div>
+    </div>
+  </div>
+
+  <script src="js/supabase.min.js"></script>
+  <script src="js/html5-qrcode.min.js"></script>
+  <script src="js/config.js"></script>
+  <script>
+  (function() {
+    var storeId = getParam('store');
+    var urlCode = getParam('code') || '';
+    var gpsRadius = 200; // 默认值，会被门店单独配置覆盖
+
+    if (!storeId) {
+      showError('请扫描正确的门店二维码');
+      return;
+    }
+
+    var currentName = null;
+    var currentPhone = null;
+    var currentRecord = null;
+    var phoneToName = {};
+    var phoneToMax = {};   // max check-ins per day
+    var storeLat = null;
+    var storeLng = null;
+    var dailySecret = null;
+    var dailyCodeEnabled = true;
+    var cutoffHour = 2;
+    var cutoffMinute = 0;
+    var scheduleStoreName = null;
+    var scheduleApiUrl = SCHEDULE_CONFIG.apiUrl;
+    var scheduleApiKey = SCHEDULE_CONFIG.apiKey;
+    var currentScheduleInfo = null; // { location, shiftType }
+
+    init();
+
+    function init() {
+      Promise.all([loadStore(), loadAppConfig()]).then(function() {
+        // 验证动态码（需开启每日变化且有密钥）
+        if (dailyCodeEnabled && dailySecret && urlCode) {
+          var expected = computeDailyCode(dailySecret, storeId);
+          if (expected !== urlCode.toUpperCase()) {
+            showError('二维码已失效', '请扫描今日最新二维码');
+            return;
+          }
+        }
+        return loadRoster();
+      }).then(function() {
+        var phones = Object.keys(phoneToName);
+        if (phones.length === 0) {
+          document.getElementById('storeName').textContent = '暂无花名册';
+          document.getElementById('storeTag').textContent = '请联系管理员添加员工';
+          return;
+        }
+        var savedPhone = localStorage.getItem(saveKey());
+        if (savedPhone && phoneToName[savedPhone]) {
+          currentPhone = savedPhone;
+          currentName = phoneToName[savedPhone];
+          verifyLocation().then(function() { showStatus(); });
+        } else {
+          if (savedPhone) localStorage.removeItem(saveKey());
+          showPhoneInput();
+        }
+      }).catch(function(err) {
+        showError('加载失败', err.message || '网络错误');
+      });
+    }
+
+    function loadStore() {
+      return db.from('store').select('*').eq('store_id', storeId).single()
+        .then(function(_ref) {
+          if (_ref.error || !_ref.data) throw new Error('门店不存在');
+          document.getElementById('storeName').textContent = _ref.data.name;
+          document.getElementById('storeTag').textContent = storeId;
+          storeLat = _ref.data.lat || null;
+          storeLng = _ref.data.lng || null;
+          gpsRadius = _ref.data.gps_radius || 200;
+          if (_ref.data.cutoff_hour != null) cutoffHour = _ref.data.cutoff_hour;
+          if (_ref.data.cutoff_minute != null) cutoffMinute = _ref.data.cutoff_minute;
+          scheduleStoreName = _ref.data.schedule_store_name || null;
+          // 显示排班门店
+          if (scheduleStoreName) {
+            document.getElementById('scheduleStoreDisplay').textContent = scheduleStoreName;
+            document.getElementById('scheduleInfoBig').style.display = '';
+          }
+        });
+    }
+
+    function loadAppConfig() {
+      return db.from('app_config').select('*').limit(1).single()
+        .then(function(r) {
+          if (r.data) {
+            dailySecret = r.data.daily_secret || null;
+            dailyCodeEnabled = r.data.daily_code_enabled !== false;
+            cutoffHour = (r.data.cutoff_hour != null) ? r.data.cutoff_hour : 2;
+            cutoffMinute = (r.data.cutoff_minute != null) ? r.data.cutoff_minute : 0;
+            scheduleApiUrl = r.data.schedule_api_url || SCHEDULE_CONFIG.apiUrl;
+            if (/github\.io$/i.test(location.hostname)) {
+              scheduleApiUrl = SCHEDULE_CONFIG.apiUrl;
+            }
+            scheduleApiKey = r.data.schedule_api_key || SCHEDULE_CONFIG.apiKey;
+          }
+        }).catch(function() {
+          dailySecret = null;
+          dailyCodeEnabled = true;
+          cutoffHour = 2;
+          cutoffMinute = 0;
+        });
+    }
+
+    function loadRoster() {
+      return db.from('roster').select('name,phone,max_checkins').eq('store_id', storeId)
+        .then(function(_ref2) {
+          if (_ref2.error) throw _ref2.error;
+          phoneToName = {};
+          phoneToMax = {};
+          phoneToDevice = {};
+(_ref2.data || []).forEach(function(r) {
+            if (r.phone) {
+              phoneToName[r.phone] = r.name;
+              phoneToMax[r.phone] = (r.max_checkins != null) ? r.max_checkins : 3;
+              
+            }
+          });
+        });
+    }
+
+    function showPhoneInput() {
+      hideAll();
+      document.getElementById('phoneArea').style.display = '';
+      document.getElementById('phoneInput').value = '';
+      document.getElementById('phoneError').style.display = 'none';
+      setTimeout(function() { document.getElementById('phoneInput').focus(); }, 300);
+    }
+
+    function showStatus() {
+      hideAll();
+      document.getElementById('empName').textContent = currentName;
+      document.getElementById('phoneDisplay').textContent = currentPhone ? maskPhone(currentPhone) : '';
+      document.getElementById('statusArea').style.display = '';
+      document.getElementById('actionArea').style.display = '';
+      document.getElementById('btnChange').style.display = 'none';
+      loadCheckStatus();
+      // 手机号验证通过后立即查询排班信息并显示点位
+      var today = dateStr(new Date());
+      fetchScheduledTimes(currentPhone, today).then(function(s) {
+        currentScheduleInfo = s;
+        var infoDiv = document.getElementById('scheduleInfoBig');
+        if (s && s.location) {
+          document.getElementById('locationDisplayBig').textContent = '点位：' + s.location + (s.shiftType ? '（' + s.shiftType + '）' : '');
+          infoDiv.style.display = '';
+        } else if (scheduleStoreName) {
+          document.getElementById('locationDisplayBig').textContent = '暂无排班';
+          infoDiv.style.display = '';
+        }
+      });
+    }
+
+    function hideAll() {
+      document.getElementById('phoneArea').style.display = 'none';
+      document.getElementById('verifyLoading').style.display = 'none';
+      document.getElementById('statusArea').style.display = 'none';
+      document.getElementById('actionArea').style.display = 'none';
+    }
+
+    // --- 位置验证 ---
+    function verifyLocation() {
+      return new Promise(function(resolve, reject) {
+        if (!storeLat || !storeLng) {
+          showError('门店未设置打卡坐标', '请联系管理员在后台设置门店经纬度后再试');
+          reject(new Error('no store coordinates'));
+          return;
+        }
+        if (!navigator.geolocation) {
+          showError('定位不可用', '请使用支持GPS的浏览器');
+          reject(new Error('geolocation not supported'));
+          return;
+        }
+        hideAll();
+        document.getElementById('verifyLoading').style.display = '';
+        document.getElementById('verifyMsg').textContent = '正在获取位置...';
+        navigator.geolocation.getCurrentPosition(function(pos) {
+          var dist = haversine(storeLat, storeLng, pos.coords.latitude, pos.coords.longitude);
+          if (dist <= gpsRadius) {
+            resolve();
+          } else {
+            showError('不在打卡范围内', '你距门店约' + Math.round(dist) + '米，超出允许范围');
+            reject(new Error('out of range'));
+          }
+        }, function(err) {
+          var msg;
+          switch (err.code) {
+            case 1: msg = '请允许定位权限后重试'; break;
+            case 2: msg = '无法获取位置，请检查GPS'; break;
+            case 3: msg = '定位超时，请重试'; break;
+            default: msg = '定位失败';
+          }
+          showError('定位失败', msg);
+          reject(err);
+        }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+      });
+    }
+
+    // --- 手机号登录 ---
+    function showStatus() {
+      hideAll();
+      document.getElementById('empName').textContent = currentName;
+      document.getElementById('phoneDisplay').textContent = currentPhone ? maskPhone(currentPhone) : '';
+      document.getElementById('statusArea').style.display = '';
+      document.getElementById('actionArea').style.display = '';
+      document.getElementById('btnChange').style.display = 'none';
+      loadCheckStatus();
+      // 手机号验证通过后立即查询排班信息并显示点位
+      var today = dateStr(new Date());
+      fetchScheduledTimes(currentPhone, today).then(function(s) {
+        currentScheduleInfo = s;
+        var infoDiv = document.getElementById('scheduleInfoBig');
+        if (s && s.location) {
+          document.getElementById('locationDisplayBig').textContent = '点位：' + s.location + (s.shiftType ? '（' + s.shiftType + '）' : '');
+          infoDiv.style.display = '';
+        } else if (scheduleStoreName) {
+          document.getElementById('locationDisplayBig').textContent = '暂无排班';
+          infoDiv.style.display = '';
+        }
+      });
+    }
+
+    function hideAll() {
+      document.getElementById('phoneArea').style.display = 'none';
+      document.getElementById('verifyLoading').style.display = 'none';
+      document.getElementById('statusArea').style.display = 'none';
+      document.getElementById('actionArea').style.display = 'none';
+    }
+
+    // --- 位置验证 ---
+    function verifyLocation() {
+      return new Promise(function(resolve, reject) {
+        if (!storeLat || !storeLng) {
+          showError('门店未设置打卡坐标', '请联系管理员在后台设置门店经纬度后再试');
+          reject(new Error('no store coordinates'));
+          return;
+        }
+        if (!navigator.geolocation) {
+          showError('定位不可用', '请使用支持GPS的浏览器');
+          reject(new Error('geolocation not supported'));
+          return;
+        }
+        hideAll();
+        document.getElementById('verifyLoading').style.display = '';
+        document.getElementById('verifyMsg').textContent = '正在获取位置...';
+        navigator.geolocation.getCurrentPosition(function(pos) {
+          var dist = haversine(storeLat, storeLng, pos.coords.latitude, pos.coords.longitude);
+          if (dist <= gpsRadius) {
+            resolve();
+          } else {
+            showError('不在打卡范围内', '你距门店约' + Math.round(dist) + '米，超出允许范围');
+            reject(new Error('out of range'));
+          }
+        }, function(err) {
+          var msg;
+          switch (err.code) {
+            case 1: msg = '请允许定位权限后重试'; break;
+            case 2: msg = '无法获取位置，请检查GPS'; break;
+            case 3: msg = '定位超时，请重试'; break;
+            default: msg = '定位失败';
+          }
+          showError('定位失败', msg);
+          reject(err);
+        }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+      });
+    }
+
+    // --- 手机号登录 ---
+    
+
+    window.doPhoneLogin = function() {
+      var phone = document.getElementById('phoneInput').value.trim();
+      if (!phone) return;
+      if (!/^1\d{10}$/.test(phone)) {
+        document.getElementById('phoneError').textContent = '请输入正确的11位手机号';
+        document.getElementById('phoneError').style.display = '';
+        return;
+      }
+      var name = phoneToName[phone];
+      if (!name) {
+        document.getElementById('phoneError').textContent = '该手机号不在花名册中，请联系管理员';
+        document.getElementById('phoneError').style.display = '';
+        return;
+      }
+      currentPhone = phone;
+      currentName = name;
+      localStorage.setItem(saveKey(), phone);
+      verifyLocation().then(function() { showStatus(); }).catch(function() {});
+    };
+
+    // --- 打卡状态（隔天凌晨2点自动过期） ---
+    function loadCheckStatus() {
+      var today = dateStr(new Date());
+      var yesterday = dateStr(new Date(Date.now() - 86400000));
+      db.from('check_record').select('*')
+        .eq('store_id', storeId).eq('name', currentName)
+        .gte('date', yesterday).order('check_in', { ascending: false }).limit(2)
+        .then(function(_ref3) {
+          if (_ref3.error) throw _ref3.error;
+          var rec = (_ref3.data && _ref3.data.length > 0) ? _ref3.data[0] : null;
+          if (!rec || rec.check_out) {
+            currentRecord = null;
+            renderNoneStatus(rec);
+            return;
+          }
+          // 未签退的记录，判断是否过期
+          var now = new Date();
+          if (rec.date === yesterday && (now.getHours() > cutoffHour || (now.getHours() === cutoffHour && now.getMinutes() >= cutoffMinute))) {
+            currentRecord = null;
+            renderNoneStatus(rec, true);
+          } else {
+            currentRecord = rec;
+            // urlCode 存在 = 刚扫码进来，直接签退；否则需重新扫码
+            renderCheckedIn(rec, !!urlCode);
+          }
+        }).catch(function() {
+          currentRecord = null;
+          renderNoneStatus(null);
+        });
+    }
+
+    // --- 时间显示辅助 ---
+    function fmtTimeStr(isoStr) {
+      if (!isoStr) return '--';
+      try {
+        var d = new Date(isoStr);
+        if (isNaN(d.getTime())) return '--';
+        return ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+      } catch(e) { return '--'; }
+    }
+
+    // 构建排班+实际时间对比 HTML
+    function buildTimeCard(schedIn, schedOut, actualIn, actualOut) {
+      var html = '';
+      // 排班时间
+      if (schedIn || schedOut) {
+        html += '<div class="time-section">' +
+          '<div class="time-section-title">📋 排班时间</div>' +
+          '<div class="time-row"><span class="label">到岗</span><span class="value">' + fmtTimeStr(schedIn) + '</span></div>' +
+          '<div class="time-row"><span class="label">离岗</span><span class="value">' + fmtTimeStr(schedOut) + '</span></div>' +
+          '</div>';
+      }
+      // 实际打卡
+      if (actualIn || actualOut) {
+        if (schedIn || schedOut) html += '<hr class="time-section-divider">';
+        html += '<div class="time-section">' +
+          '<div class="time-section-title">⏱ 实际打卡</div>' +
+          '<div class="time-row"><span class="label">到岗</span><span class="value">' + fmtTimeStr(actualIn) + '</span></div>';
+        if (actualOut) {
+          html += '<div class="time-row"><span class="label">离岗</span><span class="value">' + fmtTimeStr(actualOut) + '</span></div>';
+        } else {
+          html += '<div class="time-row"><span class="label">离岗</span><span class="value dim">--</span></div>';
+        }
+        html += '</div>';
+      }
+      return html;
+    }
+
+    function renderNoneStatus(lastRec, expired) {
+      document.getElementById('statusBadge').textContent = '未打卡';
+      document.getElementById('statusBadge').className = 'status-badge none';
+      var info = document.getElementById('timeInfo');
+      if (lastRec) {
+        var ci = lastRec.check_in;
+        var co = lastRec.check_out || null;
+        var sci = lastRec.scheduled_check_in || null;
+        var sco = lastRec.scheduled_check_out || null;
+        var html = buildTimeCard(sci, sco, ci, co);
+        if (co) {
+          html += '<div class="hours-highlight">上次在岗 ' + calcHours(new Date(ci), new Date(co)) + '</div>';
+        }
+        if (expired && !co) {
+          html += '<div style="color:#ef4440;font-weight:600;margin-top:10px;padding:10px 14px;background:#fff5f5;border-radius:8px;font-size:14px">' +
+            '昨天的打卡未签退，请联系管理员确认离岗时间</div>';
+        }
+        info.innerHTML = html;
+      } else {
+        info.innerHTML = '<div style="color:#999;padding:10px">今天还没有打卡记录</div>';
+      }
+      document.getElementById('btnCheckin').style.display = urlCode ? '' : 'none';
+      document.getElementById('btnCheckout').style.display = 'none';
+      document.getElementById('btnChange').style.display = urlCode ? 'none' : '';
+      if (!urlCode) {
+        document.getElementById('btnChange').textContent = '扫码签到';
+        document.getElementById('btnChange').onclick = startScan;
+      }
+    }
+
+    function renderCheckedIn(rec, justScanned) {
+      document.getElementById('statusBadge').textContent = '已到岗';
+      document.getElementById('statusBadge').className = 'status-badge in';
+      var ci = rec.check_in;
+      var sci = rec.scheduled_check_in || null;
+      var sco = rec.scheduled_check_out || null;
+      var html = buildTimeCard(sci, sco, ci, null);
+      html += (justScanned
+        ? '<div class="hours-highlight" style="color:#e65100">请确认签退</div>'
+        : '<div class="hours-highlight" style="color:#e65100">请重新扫码进行签退</div>');
+      document.getElementById('timeInfo').innerHTML = html;
+      document.getElementById('btnCheckin').style.display = 'none';
+      document.getElementById('btnCheckout').style.display = justScanned ? '' : 'none';
+      document.getElementById('btnChange').style.display = justScanned ? 'none' : '';
+      if (!justScanned) {
+        document.getElementById('btnChange').textContent = '扫码签退';
+        document.getElementById('btnChange').onclick = startScan;
+      }
+    }
+
+    function renderCheckedOut(rec) {
+      document.getElementById('statusBadge').textContent = '已离岗';
+      document.getElementById('statusBadge').className = 'status-badge out';
+      var ci = rec.check_in;
+      var co = rec.check_out;
+      var sci = rec.scheduled_check_in || null;
+      var sco = rec.scheduled_check_out || null;
+      var html = buildTimeCard(sci, sco, ci, co);
+      html += '<div class="hours-highlight">本次在岗 ' + calcHours(new Date(ci), new Date(co)) + '</div>';
+      document.getElementById('timeInfo').innerHTML = html;
+      document.getElementById('btnCheckin').style.display = '';
+      document.getElementById('btnCheckout').style.display = 'none';
+    }
+
+    function renderCheckInDone(rec) {
+      document.getElementById('statusBadge').textContent = '已到岗';
+      document.getElementById('statusBadge').className = 'status-badge in';
+      var ci = rec.check_in;
+      var sci = rec.scheduled_check_in || null;
+      var sco = rec.scheduled_check_out || null;
+      var loc = rec.location || (currentScheduleInfo && currentScheduleInfo.location) || null;
+      var html = '';
+      // 显示点位信息
+      if (loc) {
+        html += '<div class="schedule-location" style="font-size:14px;color:#1a3e6f;margin-bottom:8px;padding:6px 12px;background:#e8f0fe;border-radius:8px;display:inline-block">📍 ' + escHtml(loc) + '</div>';
+      }
+      html += buildTimeCard(sci, sco, ci, null);
+      html += '<div class="hours-highlight" style="color:#e65100">请重新扫码进行签退</div>';
+      document.getElementById('timeInfo').innerHTML = html;
+      document.getElementById('btnCheckin').style.display = 'none';
+      document.getElementById('btnCheckout').style.display = 'none';
+      document.getElementById('btnChange').style.display = '';
+      document.getElementById('btnChange').textContent = '扫码签退';
+      document.getElementById('btnChange').onclick = startScan;
+    }
+
+    function renderCheckOutDone(rec) {
+      document.getElementById('statusBadge').textContent = '已离岗';
+      document.getElementById('statusBadge').className = 'status-badge out';
+      var ci = rec.check_in;
+      var co = rec.check_out;
+      var sci = rec.scheduled_check_in || null;
+      var sco = rec.scheduled_check_out || null;
+      var html = buildTimeCard(sci, sco, ci, co);
+      html += '<div class="hours-highlight">本次在岗 ' + calcHours(new Date(ci), new Date(co)) + '</div>' +
+        '<div style="color:#999;margin-top:10px">请重新扫码进行下次签到</div>';
+      document.getElementById('timeInfo').innerHTML = html;
+      document.getElementById('btnCheckin').style.display = 'none';
+      document.getElementById('btnCheckout').style.display = 'none';
+      document.getElementById('btnChange').style.display = '';
+      document.getElementById('btnChange').textContent = '扫码签到';
+      document.getElementById('btnChange').onclick = startScan;
+    }
+
+    // --- 排班查询 ---
+    function fetchScheduledTimes(phone, today) {
+      if (!scheduleStoreName || !scheduleApiUrl || !scheduleApiKey) return Promise.resolve(null);
+      // 跨越0点也查昨天的排班
+      var yesterday = dateStr(new Date(new Date().getTime() - 86400000));
+      var fetchDay = function(day) {
+        var url = scheduleApiUrl + '/api/public/schedule?key=' + encodeURIComponent(scheduleApiKey) +
+          '&date=' + day + '&storeName=' + encodeURIComponent(scheduleStoreName);
+        var timeout = new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 5000); });
+        return Promise.race([
+          fetch(url, { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r) { if (!r.ok) throw new Error('schedule api error'); return r.json(); }),
+          timeout
+        ]).then(function(data) {
+          return (data && data.success) ? data : null;
+        }).catch(function() { return null; });
+      };
+      return Promise.all([fetchDay(today), fetchDay(yesterday)]).then(function(results) {
+        var entries = [];
+        [].concat(results[0] ? results[0].stores || [] : []).concat(results[1] ? results[1].stores || [] : []).forEach(function(store) {
+          if (store.storeName !== scheduleStoreName) return;
+          (store.locations || []).forEach(function(loc) {
+            (loc.staff || []).forEach(function(st) {
+              if (String(st.phone) !== phone) return;
+              var dataDay = today;
+              if (results[1] && results[1].stores) {
+                var inToday = (results[0] && results[0].stores || []).some(function(s) { return s.storeName === store.storeName && (s.locations||[]).some(function(l) { return (l.staff||[]).some(function(x) { return String(x.phone)===phone; }); }); });
+                if (!inToday) dataDay = yesterday;
+              }
+              var inDate = dateToISO(dataDay, st.timeIn);
+              var outDate = dateToISO(dataDay, st.timeOut);
+              if (outDate && inDate && outDate <= inDate) {
+                outDate = dateToISO(dateStr(new Date(new Date(inDate).getTime() + 86400000)), st.timeOut);
+              }
+              entries.push({ scheduled_in: inDate, scheduled_out: outDate, location: loc.location, shiftType: st.shiftType });
+            });
+          });
+        });
+        if (entries.length === 0) return null;
+        // 返回第一个可打卡的排班（距排班离岗时间不足30分钟不可打卡）
+        var now = new Date();
+        for (var ei = 0; ei < entries.length; ei++) {
+          if (entries[ei].scheduled_in) {
+            var earliest = new Date(entries[ei].scheduled_in).getTime() - 2 * 60 * 60 * 1000;
+            if (now.getTime() < earliest) continue;
+          }
+          if (entries[ei].scheduled_out) {
+            var remain = new Date(entries[ei].scheduled_out).getTime() - now.getTime();
+            if (remain < 30 * 60 * 1000) continue; // 剩余不足30分钟，不可打卡
+          }
+          return entries[ei];
+        }
+        return null;
+      }).catch(function() {
+        return null;
+      });
+    }
+
+    function dateToISO(dateStr, timeStr) {
+      if (!timeStr) return null;
+      var parts = timeStr.split(':');
+      if (parts.length < 2) return null;
+      // 使用北京时间 +08:00，确保跨设备时区一致性
+      return new Date(dateStr + 'T' + timeStr + ':00+08:00').toISOString();
+    }
+
+    // --- 打卡操作 ---
+    window.doCheckIn = function() {
+      if (!urlCode) { toast('请先扫码', 'error'); return; }
+      var btn = document.getElementById('btnCheckin');
+      if (btn.disabled) return; // 防止重复点击
+      btn.disabled = true;
+      var maxC = phoneToMax[currentPhone] || 3;
+      var today = dateStr(new Date());
+      var now = new Date();
+
+      // 先检查是否有当天未签退的记录（防止重复签到）
+      db.from('check_record').select('id').eq('store_id', storeId).eq('name', currentName)
+        .eq('date', today).is('check_out', null).limit(1)
+        .then(function(activeRes) {
+          if (activeRes.data && activeRes.data.length > 0) {
+            toast('你今天已有未签退的记录，请先签退后再签到', 'error');
+            return Promise.reject('active-exists');
+          }
+          // 检查今日总打卡次数
+          return db.from('check_record').select('id', { count: 'exact' })
+            .eq('store_id', storeId).eq('name', currentName).eq('date', today);
+        }).then(function(cntRes) {
+          if (cntRes === 'active-exists') return Promise.reject('active-exists');
+          if (cntRes.error) throw cntRes.error;
+          var totalCount = (cntRes.data && cntRes.data.length) || 0;
+          if (totalCount >= maxC) {
+            toast('今日打卡次数已达上限（' + maxC + '次），已完成' + totalCount + '次', 'error');
+            return Promise.reject('limit');
+          }
+          // 查询排班信息
+          return fetchScheduledTimes(currentPhone, today).then(function(scheduled) {
+            currentScheduleInfo = scheduled;
+            // 更新页面显示点位信息
+            if (scheduled && scheduled.location) {
+              document.getElementById('locationDisplayBig').textContent = '点位：' + scheduled.location + (scheduled.shiftType ? '（' + scheduled.shiftType + '）' : '');
+              document.getElementById('scheduleInfoBig').style.display = '';
+            }
+            if (!scheduled) {
+              toast('你今天没有排班，无法打卡', 'error');
+              return Promise.reject('no-schedule');
+            }
+            // 检查排班时间是否已过/剩余不足30分钟
+            var nowMs = now.getTime();
+            if (scheduled.scheduled_out) {
+              var outMs = new Date(scheduled.scheduled_out).getTime();
+              if (nowMs > outMs) {
+                toast('排班时间已过（离岗时间 ' + fmtTime(new Date(scheduled.scheduled_out)) + '），无法打卡', 'error');
+                return Promise.reject('time-passed');
+              }
+              if (outMs - nowMs < 30 * 60 * 1000) {
+                toast('距排班离岗时间不足30分钟，无法打卡', 'error');
+                return Promise.reject('time-short');
+              }
+            }
+            if (scheduled.scheduled_in) {
+              var inMs = new Date(scheduled.scheduled_in).getTime();
+              // 提前2小时以上不允许打卡
+              if (nowMs < inMs - 7200000) {
+                toast('排班时间未到（到岗时间 ' + fmtTime(new Date(scheduled.scheduled_in)) + '），请稍后再试', 'error');
+                return Promise.reject('too-early');
+              }
+            }
+            return Promise.resolve(scheduled);
+          }).then(function(scheduled) {
+            // 查询时薪（根据门店模式：个人时薪/点位时薪）
+            var loc = scheduled ? scheduled.location : null;
+            var loadLocationWage = function() {
+              if (!loc) return Promise.resolve(null);
+              return db.from('location_wage').select('hourly_wage').eq('store_id', storeId).eq('location', loc).single().then(function(wr) {
+                return (wr.data && wr.data.hourly_wage != null) ? wr.data.hourly_wage : null;
+              });
+            };
+            var wagePromise = db.from('store').select('wage_mode').eq('store_id', storeId).single().then(function(sr) {
+              var mode = (sr.data && sr.data.wage_mode) || 'location';
+              if (mode === 'person') {
+                return db.from('roster').select('hourly_wage').eq('store_id', storeId).eq('phone', currentPhone).single().then(function(rr) {
+                  if (rr.data && rr.data.hourly_wage != null) return rr.data.hourly_wage;
+                  return loadLocationWage();
+                });
+              }
+              return loadLocationWage();
+            }).catch(function() { return null; });
+            return wagePromise.then(function(hw) {
+              var insertData = {
+                store_id: storeId,
+                name: currentName,
+                phone: currentPhone,
+                check_in: now.toISOString(),
+                date: dateStr(now),
+                scheduled_check_in: scheduled ? scheduled.scheduled_in : null,
+                scheduled_check_out: scheduled ? scheduled.scheduled_out : null,
+                location: loc,
+                shift_type: scheduled ? scheduled.shiftType || null : null,
+                hourly_wage: hw,
+                _sync_origin: 'local',
+                _sync_ts: now.toISOString()
+              };
+              return db.from('check_record').insert(insertData).select().single();
+            });
+          });
+        }).then(function(_ref4) {
+          if (_ref4 === 'limit' || _ref4 === 'active-exists') return;
+          if (_ref4.error) throw _ref4.error;
+          currentRecord = _ref4.data;
+          // 签到后清除 URL 中的 code，防止刷新误认为刚扫码
+          var u = new URL(location.href);
+          u.searchParams.delete('code');
+          history.replaceState(null, '', u.toString());
+          urlCode = '';
+          renderCheckInDone(_ref4.data);
+          toast('签到成功，请重新扫码进行签退');
+        }).catch(function(err) {
+          if (err === 'limit' || err === 'no-schedule' || err === 'active-exists' || err === 'time-passed' || err === 'too-early' || err === 'time-short') {
+            btn.disabled = false; return;
+          }
+          btn.disabled = false;
+          toast('签到失败: ' + (err.message || '网络错误'), 'error');
+        });
+    };
+
+    window.doCheckOut = function() {
+      if (!currentRecord) { toast('未找到签到记录', 'error'); return; }
+      var now = new Date();
+      var onDutyMs = now.getTime() - new Date(currentRecord.check_in).getTime();
+      if (onDutyMs < 30 * 60 * 1000) {
+        var remainMin = 30 - Math.floor(onDutyMs / 60000);
+        toast('到岗不足30分钟，请等待' + remainMin + '分钟后再签退', 'error');
+        return;
+      }
+      db.from('check_record').update({ check_out: now.toISOString(), _sync_origin: 'local', _sync_ts: now.toISOString() })
+        .eq('id', currentRecord.id).select().single()
+        .then(function(_ref5) {
+          if (_ref5.error) throw _ref5.error;
+          currentRecord = _ref5.data;
+          // 签退后清除 URL 中的 code
+          if (urlCode) {
+            var u = new URL(location.href);
+            u.searchParams.delete('code');
+            history.replaceState(null, '', u.toString());
+            urlCode = '';
+          }
+          renderCheckOutDone(_ref5.data);
+          toast('签退成功，请重新扫码进行下次签到');
+        }).catch(function(err) {
+          toast('签退失败: ' + (err.message || '网络错误'), 'error');
+        });
+    };
+
+    window.clearIdentity = function() {
+      localStorage.removeItem(saveKey());
+      currentName = null;
+      currentPhone = null;
+      currentRecord = null;
+      showPhoneInput();
+    };
+
+    // --- 每日码计算 ---
+    function effectiveDate(ch, cm) {
+      var now = new Date();
+      if (now.getHours() < ch || (now.getHours() === ch && now.getMinutes() < cm)) {
+        return dateStr(new Date(now.getTime() - 86400000));
+      }
+      return dateStr(now);
+    }
+    function computeDailyCode(secret, sid) {
+      var today = effectiveDate(cutoffHour, cutoffMinute);
+      var input = secret + '|' + sid + '|' + today;
+      var hash = 5381;
+      for (var i = 0; i < input.length; i++) {
+        hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0;
+      }
+      return Math.abs(hash).toString(36).substring(0, 6).toUpperCase();
+    }
+
+    // --- GPS距离计算 (Haversine) ---
+    function haversine(lat1, lng1, lat2, lng2) {
+      var R = 6371000; // 地球半径（米）
+      var dLat = (lat2 - lat1) * Math.PI / 180;
+      var dLng = (lng2 - lng1) * Math.PI / 180;
+      var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+        Math.sin(dLng/2) * Math.sin(dLng/2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // --- 工具 ---
+    function saveKey() { return 'att-phone-' + storeId; }
+    function getParam(n) { return new URLSearchParams(location.search).get(n); }
+    function escHtml(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    function dateStr(d) {
+      return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+    }
+    function fmtTime(d) {
+      if (!d) return '--';
+      return ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+    }
+    function calcHours(start, end) {
+      if (!start || !end) return '--';
+      var totalMin = (end.getTime() - start.getTime()) / 60000;
+      var roundedMin = Math.floor(totalMin / 30) * 30;
+      return (roundedMin / 60).toFixed(1) + '小时';
+    }
+    function maskPhone(p) {
+      if (!p || p.length < 7) return p;
+      return p.substring(0, 3) + '****' + p.substring(7);
+    }
+    window.startScan = function() {
+      var overlay = document.getElementById('scannerOverlay');
+      overlay.style.display = '';
+      var reader = document.getElementById('qrReader');
+      reader.innerHTML = '<div style="color:#999;text-align:center;padding:40px;font-size:14px">正在启动摄像头...</div>';
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        reader.innerHTML = '<div style="color:#f44336;text-align:center;padding:40px;font-size:14px">当前浏览器不支持摄像头<br><br>请用系统浏览器（Chrome/Safari）打开</div>';
+        return;
+      }
+      setTimeout(function() {
+        var boxW = Math.min(document.querySelector('.scanner-box').offsetWidth, 420);
+        var qrSize = Math.floor(boxW * 0.7);
+        window._html5QrCode = new Html5Qrcode('qrReader');
+        window._html5QrCode.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: qrSize, height: qrSize } },
+          function(decodedText) {
+            stopScan();
+            if (/index\.html/.test(decodedText)) {
+              window.location.href = decodedText;
+            } else {
+              toast('请扫描门店打卡二维码', 'error');
+            }
+          },
+          function() {}
+        ).catch(function(err) {
+          stopScan();
+          toast('无法打开相机: ' + (err.message || '请检查权限'), 'error');
+        });
+      }, 200);
+    };
+
+    window.stopScan = function() {
+      document.getElementById('scannerOverlay').style.display = 'none';
+      if (window._html5QrCode) {
+        window._html5QrCode.stop().then(function() {
+          window._html5QrCode.clear();
+        }).catch(function() {});
+        window._html5QrCode = null;
+      }
+    };
+
+    function showError(title, detail) {
+      hideAll();
+      document.getElementById('storeName').textContent = title || '出错了';
+      document.getElementById('storeTag').textContent = detail || '';
+    }
+    function toast(msg, type) {
+      type = type || 'success';
+      var el = document.createElement('div');
+      el.className = 'toast ' + type;
+      el.textContent = msg;
+      document.body.appendChild(el);
+      setTimeout(function() { el.remove(); }, 2500);
+    }
+  })();
+  </script>
+</body>
+</html>
