@@ -18,6 +18,7 @@
     <div class="schedule-info-big" id="scheduleInfoBig" style="display:none;font-size:17px;color:#1a3e6f;margin-top:10px;padding:10px 16px;background:#e8f0fe;border-radius:10px;text-align:center">
       <div>排班门店：<strong id="scheduleStoreDisplay"></strong></div>
       <div id="locationDisplayBig" style="margin-top:4px;font-weight:700;font-size:18px;color:#e65100"></div>
+      <div id="scheduleTimeDisplayBig" style="margin-top:6px;font-size:15px;color:#1a3e6f"></div>
     </div>
   </div>
 
@@ -205,18 +206,21 @@
       document.getElementById('actionArea').style.display = '';
       document.getElementById('btnChange').style.display = 'none';
       loadCheckStatus();
-      // 手机号验证通过后立即查询排班信息并显示点位
+      refreshTodayScheduleDisplay();
+    }
+
+    function refreshTodayScheduleDisplay() {
       var today = dateStr(new Date());
-      fetchScheduledTimes(currentPhone, today).then(function(s) {
-        currentScheduleInfo = s;
-        var infoDiv = document.getElementById('scheduleInfoBig');
-        if (s && s.location) {
-          document.getElementById('locationDisplayBig').textContent = '点位：' + s.location + (s.shiftType ? '（' + s.shiftType + '）' : '');
-          infoDiv.style.display = '';
-        } else if (scheduleStoreName) {
-          document.getElementById('locationDisplayBig').textContent = '暂无排班';
-          infoDiv.style.display = '';
+      return loadScheduleData(currentPhone, today).then(function(data) {
+        window._scheduleEntries = data.entries || [];
+        if (data.apiFailed) {
+          renderTodayScheduleDisplay(null, true);
+          return data;
         }
+        var display = pickTodayDisplayEntry(data.entries, today);
+        currentScheduleInfo = display;
+        renderTodayScheduleDisplay(display, false);
+        return data;
       });
     }
 
@@ -266,77 +270,6 @@
     }
 
     // --- 手机号登录 ---
-    function showStatus() {
-      hideAll();
-      document.getElementById('empName').textContent = currentName;
-      document.getElementById('phoneDisplay').textContent = currentPhone ? maskPhone(currentPhone) : '';
-      document.getElementById('statusArea').style.display = '';
-      document.getElementById('actionArea').style.display = '';
-      document.getElementById('btnChange').style.display = 'none';
-      loadCheckStatus();
-      // 手机号验证通过后立即查询排班信息并显示点位
-      var today = dateStr(new Date());
-      fetchScheduledTimes(currentPhone, today).then(function(s) {
-        currentScheduleInfo = s;
-        var infoDiv = document.getElementById('scheduleInfoBig');
-        if (s && s.location) {
-          document.getElementById('locationDisplayBig').textContent = '点位：' + s.location + (s.shiftType ? '（' + s.shiftType + '）' : '');
-          infoDiv.style.display = '';
-        } else if (scheduleStoreName) {
-          document.getElementById('locationDisplayBig').textContent = '暂无排班';
-          infoDiv.style.display = '';
-        }
-      });
-    }
-
-    function hideAll() {
-      document.getElementById('phoneArea').style.display = 'none';
-      document.getElementById('verifyLoading').style.display = 'none';
-      document.getElementById('statusArea').style.display = 'none';
-      document.getElementById('actionArea').style.display = 'none';
-    }
-
-    // --- 位置验证 ---
-    function verifyLocation() {
-      return new Promise(function(resolve, reject) {
-        if (!storeLat || !storeLng) {
-          showError('门店未设置打卡坐标', '请联系管理员在后台设置门店经纬度后再试');
-          reject(new Error('no store coordinates'));
-          return;
-        }
-        if (!navigator.geolocation) {
-          showError('定位不可用', '请使用支持GPS的浏览器');
-          reject(new Error('geolocation not supported'));
-          return;
-        }
-        hideAll();
-        document.getElementById('verifyLoading').style.display = '';
-        document.getElementById('verifyMsg').textContent = '正在获取位置...';
-        navigator.geolocation.getCurrentPosition(function(pos) {
-          var dist = haversine(storeLat, storeLng, pos.coords.latitude, pos.coords.longitude);
-          if (dist <= gpsRadius) {
-            resolve();
-          } else {
-            showError('不在打卡范围内', '你距门店约' + Math.round(dist) + '米，超出允许范围');
-            reject(new Error('out of range'));
-          }
-        }, function(err) {
-          var msg;
-          switch (err.code) {
-            case 1: msg = '请允许定位权限后重试'; break;
-            case 2: msg = '无法获取位置，请检查GPS'; break;
-            case 3: msg = '定位超时，请重试'; break;
-            default: msg = '定位失败';
-          }
-          showError('定位失败', msg);
-          reject(err);
-        }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
-      });
-    }
-
-    // --- 手机号登录 ---
-    
-
     window.doPhoneLogin = function() {
       var phone = document.getElementById('phoneInput').value.trim();
       if (!phone) return;
@@ -398,18 +331,17 @@
       } catch(e) { return '--'; }
     }
 
-    // 构建排班+实际时间对比 HTML
-    function buildTimeCard(schedIn, schedOut, actualIn, actualOut) {
+    // 构建「本次/当前」打卡时间对比 HTML
+    function buildTimeCard(schedIn, schedOut, actualIn, actualOut, title) {
       var html = '';
-      // 排班时间
+      var sectionTitle = title || '📋 排班时间';
       if (schedIn || schedOut) {
         html += '<div class="time-section">' +
-          '<div class="time-section-title">📋 排班时间</div>' +
+          '<div class="time-section-title">' + sectionTitle + '</div>' +
           '<div class="time-row"><span class="label">到岗</span><span class="value">' + fmtTimeStr(schedIn) + '</span></div>' +
           '<div class="time-row"><span class="label">离岗</span><span class="value">' + fmtTimeStr(schedOut) + '</span></div>' +
           '</div>';
       }
-      // 实际打卡
       if (actualIn || actualOut) {
         if (schedIn || schedOut) html += '<hr class="time-section-divider">';
         html += '<div class="time-section">' +
@@ -425,6 +357,16 @@
       return html;
     }
 
+    function buildLastRecordCard(lastRec) {
+      var ci = lastRec.check_in;
+      var co = lastRec.check_out || null;
+      var sci = lastRec.scheduled_check_in || null;
+      var sco = lastRec.scheduled_check_out || null;
+      var recDate = lastRec.date || '';
+      var title = '📋 上次打卡记录' + (recDate ? '（' + recDate + '）' : '');
+      return buildTimeCard(sci, sco, ci, co, title);
+    }
+
     function renderNoneStatus(lastRec, expired) {
       document.getElementById('statusBadge').textContent = '未打卡';
       document.getElementById('statusBadge').className = 'status-badge none';
@@ -432,9 +374,7 @@
       if (lastRec) {
         var ci = lastRec.check_in;
         var co = lastRec.check_out || null;
-        var sci = lastRec.scheduled_check_in || null;
-        var sco = lastRec.scheduled_check_out || null;
-        var html = buildTimeCard(sci, sco, ci, co);
+        var html = buildLastRecordCard(lastRec);
         if (co) {
           html += '<div class="hours-highlight">上次在岗 ' + calcHours(new Date(ci), new Date(co)) + '</div>';
         }
@@ -461,7 +401,7 @@
       var ci = rec.check_in;
       var sci = rec.scheduled_check_in || null;
       var sco = rec.scheduled_check_out || null;
-      var html = buildTimeCard(sci, sco, ci, null);
+      var html = buildTimeCard(sci, sco, ci, null, '📋 本次排班');
       html += (justScanned
         ? '<div class="hours-highlight" style="color:#e65100">请确认签退</div>'
         : '<div class="hours-highlight" style="color:#e65100">请重新扫码进行签退</div>');
@@ -501,7 +441,7 @@
       if (loc) {
         html += '<div class="schedule-location" style="font-size:14px;color:#1a3e6f;margin-bottom:8px;padding:6px 12px;background:#e8f0fe;border-radius:8px;display:inline-block">📍 ' + escHtml(loc) + '</div>';
       }
-      html += buildTimeCard(sci, sco, ci, null);
+      html += buildTimeCard(sci, sco, ci, null, '📋 本次排班');
       html += '<div class="hours-highlight" style="color:#e65100">请重新扫码进行签退</div>';
       document.getElementById('timeInfo').innerHTML = html;
       document.getElementById('btnCheckin').style.display = 'none';
@@ -529,60 +469,160 @@
       document.getElementById('btnChange').onclick = startScan;
     }
 
-    // --- 排班查询 ---
-    function fetchScheduledTimes(phone, today) {
-      if (!scheduleStoreName || !scheduleApiUrl || !scheduleApiKey) return Promise.resolve(null);
-      // 跨越0点也查昨天的排班
+    // --- 排班查询（排班表保存后 API 实时可读，此处每次重新拉取） ---
+    function fetchScheduleApiRaw(today) {
+      if (!scheduleStoreName || !scheduleApiUrl || !scheduleApiKey) {
+        return Promise.resolve({ today: null, yesterday: null, apiFailed: true });
+      }
       var yesterday = dateStr(new Date(new Date().getTime() - 86400000));
       var fetchDay = function(day) {
         var url = scheduleApiUrl + '/api/public/schedule?key=' + encodeURIComponent(scheduleApiKey) +
-          '&date=' + day + '&storeName=' + encodeURIComponent(scheduleStoreName);
-        var timeout = new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 5000); });
+          '&date=' + day + '&storeName=' + encodeURIComponent(scheduleStoreName) + '&_=' + Date.now();
+        var timeout = new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 8000); });
         return Promise.race([
-          fetch(url, { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r) { if (!r.ok) throw new Error('schedule api error'); return r.json(); }),
+          fetch(url, { headers: { 'ngrok-skip-browser-warning': '1' }, cache: 'no-store' }).then(function(r) {
+            if (!r.ok) throw new Error('schedule api error');
+            return r.json();
+          }),
           timeout
         ]).then(function(data) {
           return (data && data.success) ? data : null;
         }).catch(function() { return null; });
       };
       return Promise.all([fetchDay(today), fetchDay(yesterday)]).then(function(results) {
-        var entries = [];
-        [].concat(results[0] ? results[0].stores || [] : []).concat(results[1] ? results[1].stores || [] : []).forEach(function(store) {
+        return {
+          today: results[0],
+          yesterday: results[1],
+          apiFailed: !results[0] && !results[1]
+        };
+      });
+    }
+
+    function buildScheduleEntry(st, loc, dataDay) {
+      var schedIn = st.scheduledIn || st.timeIn;
+      var schedOut = st.scheduledOut || st.timeOut;
+      var inDate = dateToISO(dataDay, schedIn);
+      var outDate = dateToISO(dataDay, schedOut);
+      if (outDate && inDate && outDate <= inDate) {
+        outDate = dateToISO(dateStr(new Date(new Date(inDate).getTime() + 86400000)), schedOut);
+      }
+      return {
+        date: dataDay,
+        scheduled_in: inDate,
+        scheduled_out: outDate,
+        location: loc.location,
+        shiftType: st.shiftType
+      };
+    }
+
+    function collectScheduleEntries(api, phone, today) {
+      var yesterday = dateStr(new Date(new Date(today + 'T00:00:00+08:00').getTime() - 86400000));
+      var entries = [];
+      function addFromResult(data, dataDay) {
+        if (!data || !data.stores) return;
+        (data.stores || []).forEach(function(store) {
           if (store.storeName !== scheduleStoreName) return;
           (store.locations || []).forEach(function(loc) {
             (loc.staff || []).forEach(function(st) {
-              if (String(st.phone) !== phone) return;
-              var dataDay = today;
-              if (results[1] && results[1].stores) {
-                var inToday = (results[0] && results[0].stores || []).some(function(s) { return s.storeName === store.storeName && (s.locations||[]).some(function(l) { return (l.staff||[]).some(function(x) { return String(x.phone)===phone; }); }); });
-                if (!inToday) dataDay = yesterday;
-              }
-              var inDate = dateToISO(dataDay, st.timeIn);
-              var outDate = dateToISO(dataDay, st.timeOut);
-              if (outDate && inDate && outDate <= inDate) {
-                outDate = dateToISO(dateStr(new Date(new Date(inDate).getTime() + 86400000)), st.timeOut);
-              }
-              entries.push({ scheduled_in: inDate, scheduled_out: outDate, location: loc.location, shiftType: st.shiftType });
+              if (String(st.phone) !== String(phone)) return;
+              entries.push(buildScheduleEntry(st, loc, dataDay));
             });
           });
         });
-        if (entries.length === 0) return null;
-        // 返回第一个可打卡的排班（距排班离岗时间不足30分钟不可打卡）
-        var now = new Date();
-        for (var ei = 0; ei < entries.length; ei++) {
-          if (entries[ei].scheduled_in) {
-            var earliest = new Date(entries[ei].scheduled_in).getTime() - 2 * 60 * 60 * 1000;
-            if (now.getTime() < earliest) continue;
+      }
+      addFromResult(api.today, today);
+      addFromResult(api.yesterday, yesterday);
+      return entries;
+    }
+
+    function loadScheduleData(phone, today) {
+      return fetchScheduleApiRaw(today).then(function(api) {
+        if (api.apiFailed) return { entries: [], apiFailed: true };
+        return { entries: collectScheduleEntries(api, phone, today), apiFailed: false };
+      });
+    }
+
+    function pickTodayDisplayEntry(entries, today) {
+      var todayEntries = entries.filter(function(e) { return e.date === today; });
+      if (!todayEntries.length) return null;
+      todayEntries.sort(function(a, b) {
+        var aIn = a.scheduled_in ? new Date(a.scheduled_in).getTime() : 0;
+        var bIn = b.scheduled_in ? new Date(b.scheduled_in).getTime() : 0;
+        return aIn - bIn;
+      });
+      return todayEntries[0];
+    }
+
+    function renderTodayScheduleDisplay(entry, apiFailed) {
+      var infoDiv = document.getElementById('scheduleInfoBig');
+      var locEl = document.getElementById('locationDisplayBig');
+      var timeEl = document.getElementById('scheduleTimeDisplayBig');
+      if (!scheduleStoreName) { infoDiv.style.display = 'none'; return; }
+      infoDiv.style.display = '';
+      if (apiFailed) {
+        locEl.textContent = '排班查询失败，请检查网络后下拉刷新';
+        locEl.style.color = '#d94e4e';
+        if (timeEl) timeEl.textContent = '';
+        return;
+      }
+      if (!entry) {
+        locEl.textContent = '今日暂无排班';
+        locEl.style.color = '#999';
+        if (timeEl) timeEl.textContent = '请确认管理员已在排班表保存你的班次';
+        return;
+      }
+      locEl.style.color = '#e65100';
+      locEl.textContent = '今日点位：' + entry.location + (entry.shiftType ? '（' + entry.shiftType + '）' : '');
+      var tIn = entry.scheduled_in ? fmtTime(new Date(entry.scheduled_in)) : '--';
+      var tOut = entry.scheduled_out ? fmtTime(new Date(entry.scheduled_out)) : '--';
+      if (timeEl) timeEl.textContent = '今日排班：' + tIn + ' – ' + tOut;
+    }
+
+    function validateScheduleForCheckin(entries, today, now) {
+      if (!entries.length) {
+        return { ok: false, code: 'no-schedule', message: '系统中未找到你的排班，请确认管理员已在排班表保存后再试' };
+      }
+      var nowMs = now.getTime();
+      var todayEntries = entries.filter(function(e) { return e.date === today; });
+      var candidates = todayEntries.length ? todayEntries : entries.filter(function(e) {
+        return e.scheduled_out && new Date(e.scheduled_out).getTime() > nowMs;
+      });
+      if (!candidates.length) {
+        return { ok: false, code: 'no-schedule', message: '今日暂无排班，请确认管理员已在排班表保存你的班次' };
+      }
+      var blocked = [];
+      for (var i = 0; i < candidates.length; i++) {
+        var e = candidates[i];
+        if (e.scheduled_in) {
+          var inMs = new Date(e.scheduled_in).getTime();
+          if (nowMs < inMs - 7200000) {
+            blocked.push({ code: 'too-early', message: '排班时间未到（到岗 ' + fmtTime(new Date(e.scheduled_in)) + '），请稍后再试' });
+            continue;
           }
-          if (entries[ei].scheduled_out) {
-            var remain = new Date(entries[ei].scheduled_out).getTime() - now.getTime();
-            if (remain < 30 * 60 * 1000) continue; // 剩余不足30分钟，不可打卡
-          }
-          return entries[ei];
         }
-        return null;
-      }).catch(function() {
-        return null;
+        if (e.scheduled_out) {
+          var outMs = new Date(e.scheduled_out).getTime();
+          if (nowMs > outMs) {
+            blocked.push({ code: 'time-passed', message: '排班时间已过（离岗 ' + fmtTime(new Date(e.scheduled_out)) + '），无法打卡' });
+            continue;
+          }
+          if (outMs - nowMs < 30 * 60 * 1000) {
+            blocked.push({ code: 'time-short', message: '距排班离岗时间不足30分钟，无法打卡' });
+            continue;
+          }
+        }
+        return { ok: true, entry: e };
+      }
+      if (blocked.length) {
+        return { ok: false, code: blocked[0].code, message: blocked[0].message, hasSchedule: true };
+      }
+      return { ok: false, code: 'no-schedule', message: '当前无法打卡，请联系管理员' };
+    }
+
+    function fetchScheduledTimes(phone, today) {
+      return loadScheduleData(phone, today).then(function(data) {
+        var result = validateScheduleForCheckin(data.entries, today, new Date());
+        return result.ok ? result.entry : null;
       });
     }
 
@@ -623,40 +663,27 @@
             toast('今日打卡次数已达上限（' + maxC + '次），已完成' + totalCount + '次', 'error');
             return Promise.reject('limit');
           }
-          // 查询排班信息
-          return fetchScheduledTimes(currentPhone, today).then(function(scheduled) {
-            currentScheduleInfo = scheduled;
-            // 更新页面显示点位信息
-            if (scheduled && scheduled.location) {
-              document.getElementById('locationDisplayBig').textContent = '点位：' + scheduled.location + (scheduled.shiftType ? '（' + scheduled.shiftType + '）' : '');
+          // 重新拉取排班（排班表保存后实时生效，禁用缓存）
+          return loadScheduleData(currentPhone, today).then(function(data) {
+            if (data.apiFailed) {
+              toast('排班查询失败，请检查网络后重试', 'error');
+              return Promise.reject('api-failed');
+            }
+            window._scheduleEntries = data.entries || [];
+            var check = validateScheduleForCheckin(data.entries, today, now);
+            var display = pickTodayDisplayEntry(data.entries, today);
+            currentScheduleInfo = display;
+            renderTodayScheduleDisplay(display, false);
+            if (!check.ok) {
+              toast(check.message, 'error');
+              return Promise.reject(check.code);
+            }
+            currentScheduleInfo = check.entry;
+            if (check.entry && check.entry.location) {
+              document.getElementById('locationDisplayBig').textContent = '今日点位：' + check.entry.location + (check.entry.shiftType ? '（' + check.entry.shiftType + '）' : '');
               document.getElementById('scheduleInfoBig').style.display = '';
             }
-            if (!scheduled) {
-              toast('你今天没有排班，无法打卡', 'error');
-              return Promise.reject('no-schedule');
-            }
-            // 检查排班时间是否已过/剩余不足30分钟
-            var nowMs = now.getTime();
-            if (scheduled.scheduled_out) {
-              var outMs = new Date(scheduled.scheduled_out).getTime();
-              if (nowMs > outMs) {
-                toast('排班时间已过（离岗时间 ' + fmtTime(new Date(scheduled.scheduled_out)) + '），无法打卡', 'error');
-                return Promise.reject('time-passed');
-              }
-              if (outMs - nowMs < 30 * 60 * 1000) {
-                toast('距排班离岗时间不足30分钟，无法打卡', 'error');
-                return Promise.reject('time-short');
-              }
-            }
-            if (scheduled.scheduled_in) {
-              var inMs = new Date(scheduled.scheduled_in).getTime();
-              // 提前2小时以上不允许打卡
-              if (nowMs < inMs - 7200000) {
-                toast('排班时间未到（到岗时间 ' + fmtTime(new Date(scheduled.scheduled_in)) + '），请稍后再试', 'error');
-                return Promise.reject('too-early');
-              }
-            }
-            return Promise.resolve(scheduled);
+            return Promise.resolve(check.entry);
           }).then(function(scheduled) {
             // 查询时薪（根据门店模式：个人时薪/点位时薪）
             var loc = scheduled ? scheduled.location : null;
@@ -706,7 +733,7 @@
           renderCheckInDone(_ref4.data);
           toast('签到成功，请重新扫码进行签退');
         }).catch(function(err) {
-          if (err === 'limit' || err === 'no-schedule' || err === 'active-exists' || err === 'time-passed' || err === 'too-early' || err === 'time-short') {
+          if (err === 'limit' || err === 'no-schedule' || err === 'active-exists' || err === 'time-passed' || err === 'too-early' || err === 'time-short' || err === 'api-failed') {
             btn.disabled = false; return;
           }
           btn.disabled = false;
