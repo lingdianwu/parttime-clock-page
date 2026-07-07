@@ -40,13 +40,13 @@
         var locData = results[0] || {};
         var wageRows = (results[1].data || []);
         var locs = {};
-        (locData.locations || []).forEach(function(l) { if (l) locs[l] = true; });
-        wageRows.forEach(function(w) { if (w.location) locs[w.location] = true; });
-        var allLocs = Object.keys(locs).sort();
-        sel.innerHTML = '<option value="">选择点位</option>' + allLocs.map(function(l) { return '<option value="' + escHtml(l) + '">' + escHtml(l) + '</option>'; }).join('');
-
         var wageMap = {};
-        wageRows.forEach(function(w) { wageMap[w.location] = w; });
+        (locData.locations || []).forEach(function(l) { if (l) locs[l] = true; });
+        wageRows.forEach(function(w) { if (w.location) wageMap[w.location] = w; });
+        var allLocs = Object.keys(locs).sort();
+        var unsetLocs = allLocs.filter(function(l) { return !wageMap[l]; });
+        sel.innerHTML = '<option value="">选择点位</option>' + unsetLocs.map(function(l) { return '<option value="' + escHtml(l) + '">' + escHtml(l) + '</option>'; }).join('');
+
         if (allLocs.length === 0) { list.innerHTML = '<div style="color:#999;text-align:center;padding:20px">暂无点位，请先在门店管理中新增点位</div>'; return; }
         list.innerHTML = '<table class="roster-table"><thead><tr><th>点位</th><th>时薪(元/小时)</th><th>操作</th></tr></thead><tbody>' + allLocs.map(function(loc) {
           var w = wageMap[loc];

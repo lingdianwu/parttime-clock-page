@@ -145,11 +145,19 @@
       }));
     }
 
+    function loadScheduleConfig() {
+      return db.from('app_config').select('schedule_api_url,schedule_api_key').limit(1).single().then(function(r) {
+        var cfg = r.data || {};
+        if (cfg.schedule_api_url) SCHEDULE_CONFIG.apiUrl = cfg.schedule_api_url.replace(/\/$/, '');
+        if (cfg.schedule_api_key) SCHEDULE_CONFIG.apiKey = cfg.schedule_api_key;
+      }).catch(function() {});
+    }
+
     function showMain() {
       document.getElementById('loginCard').style.display = 'none';
       document.getElementById('mainBox').style.display = '';
       document.getElementById('userName').textContent = gAdminName + (gIsSuper ? ' (超级管理员)' : '');
-      loadStores();
+      loadScheduleConfig().then(function() { loadStores(); });
     }
 
     function doLogout() {
@@ -259,12 +267,23 @@
 
     function loadNewLocations() {
       var sel = document.getElementById('newLocSelect');
-      var defaults = ['讲解','收银','库管','文员','自采小吃','伴手礼','特色食品','外食罐头','桂发祥','冷食冷饮','益德成','剪纸','茶叶','手工艺品','特色熟食','击鼓'];
-      if (locations.length) {
-        sel.innerHTML = '<option value="">选择新点位</option>' + locations.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
-      } else {
+      var defaults = ['讲解员/讲解组长','销售组长','收银','库管','管理专员','自采小吃','伴手礼','特色食品','外食罐头','桂发祥','冷食冷饮','益德成','剪纸','茶叶','手工艺品','特色熟食','击鼓','酒'];
+      var sid = document.getElementById('storeSelect').value;
+      var store = stores.find(function(s) { return s.store_id === sid; });
+      var storeName = store ? (store.schedule_store_name || store.name) : '';
+      if (!storeName || !SCHEDULE_CONFIG.apiUrl) {
         sel.innerHTML = '<option value="">选择新点位</option>' + defaults.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
+        return;
       }
+      fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/location?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey) + '&storeName=' + encodeURIComponent(storeName), { headers: { 'ngrok-skip-browser-warning': '1' } })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          var locs = (d.success && d.locations && d.locations.length) ? d.locations : defaults;
+          sel.innerHTML = '<option value="">选择新点位</option>' + locs.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
+        })
+        .catch(function() {
+          sel.innerHTML = '<option value="">选择新点位</option>' + defaults.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
+        });
     }
 
     function doTransfer() {
@@ -278,8 +297,14 @@
       var staff = roster[parseInt(si)];
       var store = stores.find(function(s) { return s.store_id === sid; });
       var storeName = store ? (store.schedule_store_name || store.name) : '';
+      if (!SCHEDULE_CONFIG.apiUrl) {
+        toast('未配置排班系统地址，请在打卡后台「排班API配置」中设置', false);
+        return;
+      }
+
       var now = new Date();
       var btn = document.getElementById('transferBtn');
+      var activeRec = null;
       btn.disabled = true; btn.textContent = '处理中...';
 
       // 1. 检查当前活跃打卡记录
@@ -289,8 +314,8 @@
           btn.disabled = false; btn.textContent = '确认移岗';
           return Promise.reject('not-active');
         }
-        var rec = active.data[0];
-        var onDutyMs = now.getTime() - new Date(rec.check_in).getTime();
+        activeRec = active.data[0];
+        var onDutyMs = now.getTime() - new Date(activeRec.check_in).getTime();
         if (onDutyMs < 30 * 60 * 1000) {
           var remainMin = 30 - Math.floor(onDutyMs / 60000);
           toast('到岗不足30分钟，请等待' + remainMin + '分钟后再移岗', false);
@@ -298,14 +323,19 @@
           return Promise.reject('too-early');
         }
         // 关闭旧记录，标记为移岗
-        return db.from('check_record').update({ check_out: now.toISOString(), scheduled_check_out: rec.scheduled_check_out || now.toISOString(), shift_type: '移岗', _sync_origin: 'local', _sync_ts: now.toISOString() }).eq('id', rec.id);
+        return db.from('check_record').update({
+          check_out: now.toISOString(),
+          scheduled_check_out: activeRec.scheduled_check_out || now.toISOString(),
+          shift_type: '移岗', _sync_origin: 'local', _sync_ts: now.toISOString()
+        }).eq('id', activeRec.id);
       }).then(function() {
+        if (!activeRec) return Promise.reject('no-rec');
         // 2. 创建新点位打卡记录（移岗）
         return db.from('check_record').insert({
           store_id: sid, name: staff.name, phone: staff.phone,
           check_in: now.toISOString(), date: today,
-          scheduled_check_in: rec.scheduled_check_in || now.toISOString(),
-          scheduled_check_out: rec.scheduled_check_out || null,
+          scheduled_check_in: activeRec.scheduled_check_in || now.toISOString(),
+          scheduled_check_out: activeRec.scheduled_check_out || null,
           location: newLoc, shift_type: '移岗',
           _sync_origin: 'local', _sync_ts: now.toISOString()
         });
@@ -314,7 +344,10 @@
         return fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/transfer?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
-          body: JSON.stringify({ storeName: storeName, name: staff.name, phone: staff.phone, date: today, newLocation: newLoc })
+          body: JSON.stringify({
+            storeName: storeName, name: staff.name, phone: staff.phone,
+            date: today, oldLocation: activeRec.location || '', newLocation: newLoc
+          })
         });
       }).then(function(r) { return r.json(); }).then(function(d) {
         btn.disabled = false; btn.textContent = '确认移岗';
@@ -329,7 +362,7 @@
         }
       }).catch(function(e) {
         btn.disabled = false; btn.textContent = '确认移岗';
-        if (e === 'too-early' || e === 'not-active') return;
+        if (e === 'too-early' || e === 'not-active' || e === 'no-rec') return;
         toast('网络错误，请重试', false);
       });
     }
