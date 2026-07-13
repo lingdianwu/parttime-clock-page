@@ -80,17 +80,33 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="js/supabase.min.js"></script>
-  <script src="js/config.js"></script>
+  <script src="js/api.js?v=1"></script>
+  <script src="js/config.js?v=2"></script>
   <script>
     var gAdminStoreId = '', gAdminName = '', gIsSuper = false;
     var gAdminModules = [], gAdminStoreIds = [];
-    var stores = [], roster = [], locations = [];
+    var stores = [], roster = [], locations = [], resolvedScheduleStoreName = '';
     var today = new Date().toISOString().split('T')[0];
 
     function getDefaultPwd() { return 'admin123'; }
     function parseJson(v) { if (!v) return []; try { return typeof v==='string'?JSON.parse(v):v; } catch(e) { return []; } }
     function fmtTime(d) { if (!d) return '--'; return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
+
+    function getStoreScheduleNames(store) {
+      if (!store) return [];
+      var names = [];
+      if (store.schedule_store_name) names.push(store.schedule_store_name);
+      if (store.name && names.indexOf(store.name) === -1) names.push(store.name);
+      return names;
+    }
+
+    function fetchStoreLocations(storeName) {
+      if (!storeName || !SCHEDULE_CONFIG.apiUrl) return Promise.resolve([]);
+      return fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/location?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey) + '&storeName=' + encodeURIComponent(storeName), {  })
+        .then(function(r) { return r.json(); })
+        .then(function(d) { return (d.success && Array.isArray(d.locations)) ? d.locations : []; })
+        .catch(function() { return []; });
+    }
 
     function hasStore(sid) {
       if (gIsSuper) return true;
@@ -237,8 +253,8 @@
         }
         // 2. 查排班数据
         var store = stores.find(function(s) { return s.store_id === sid; });
-        var storeName = store ? (store.schedule_store_name || store.name) : '';
-        return fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/schedule?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey) + '&date=' + today + '&storeName=' + encodeURIComponent(storeName), { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r) { return r.json(); }).then(function(data) {
+        var storeName = resolvedScheduleStoreName || (getStoreScheduleNames(store)[0] || '');
+        return fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/schedule?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey) + '&date=' + today + '&storeName=' + encodeURIComponent(storeName), {  }).then(function(r) { return r.json(); }).then(function(data) {
           var schedHtml = '';
           (data.stores||[]).forEach(function(s) {
             (s.locations||[]).forEach(function(loc) {
@@ -267,23 +283,46 @@
 
     function loadNewLocations() {
       var sel = document.getElementById('newLocSelect');
-      var defaults = ['讲解员/讲解组长','销售组长','收银','库管','管理专员','自采小吃','伴手礼','特色食品','外食罐头','桂发祥','冷食冷饮','益德成','剪纸','茶叶','手工艺品','特色熟食','击鼓','酒'];
       var sid = document.getElementById('storeSelect').value;
-      var store = stores.find(function(s) { return s.store_id === sid; });
-      var storeName = store ? (store.schedule_store_name || store.name) : '';
-      if (!storeName || !SCHEDULE_CONFIG.apiUrl) {
-        sel.innerHTML = '<option value="">选择新点位</option>' + defaults.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
+      if (!sid) {
+        locations = [];
+        sel.innerHTML = '<option value="">请先选门店</option>';
         return;
       }
-      fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/location?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey) + '&storeName=' + encodeURIComponent(storeName), { headers: { 'ngrok-skip-browser-warning': '1' } })
-        .then(function(r) { return r.json(); })
-        .then(function(d) {
-          var locs = (d.success && d.locations && d.locations.length) ? d.locations : defaults;
-          sel.innerHTML = '<option value="">选择新点位</option>' + locs.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
-        })
-        .catch(function() {
-          sel.innerHTML = '<option value="">选择新点位</option>' + defaults.map(function(l) { return '<option value="'+l+'">'+l+'</option>'; }).join('');
+      var store = stores.find(function(s) { return s.store_id === sid; });
+      var names = getStoreScheduleNames(store);
+      if (!names.length) {
+        locations = [];
+        sel.innerHTML = '<option value="">门店未配置排班名称</option>';
+        return;
+      }
+      if (!SCHEDULE_CONFIG.apiUrl) {
+        locations = [];
+        sel.innerHTML = '<option value="">未配置排班系统地址</option>';
+        return;
+      }
+      sel.innerHTML = '<option value="">加载中...</option>';
+      resolvedScheduleStoreName = '';
+      var chain = Promise.resolve([]);
+      names.forEach(function(name) {
+        chain = chain.then(function(locs) {
+          if (locs.length) return locs;
+          return fetchStoreLocations(name).then(function(newLocs) {
+            if (newLocs.length) resolvedScheduleStoreName = name;
+            return newLocs;
+          });
         });
+      });
+      chain.then(function(locs) {
+        locations = locs;
+        if (!locations.length) {
+          sel.innerHTML = '<option value="">该门店暂无点位</option>';
+          return;
+        }
+        sel.innerHTML = '<option value="">选择新点位</option>' + locations.map(function(l) {
+          return '<option value="'+l+'">'+l+'</option>';
+        }).join('');
+      });
     }
 
     function doTransfer() {
@@ -296,7 +335,7 @@
 
       var staff = roster[parseInt(si)];
       var store = stores.find(function(s) { return s.store_id === sid; });
-      var storeName = store ? (store.schedule_store_name || store.name) : '';
+      var storeName = resolvedScheduleStoreName || (getStoreScheduleNames(store)[0] || '');
       if (!SCHEDULE_CONFIG.apiUrl) {
         toast('未配置排班系统地址，请在打卡后台「排班API配置」中设置', false);
         return;
@@ -343,7 +382,7 @@
         // 3. 调用项目系统移岗 API
         return fetch(SCHEDULE_CONFIG.apiUrl + '/api/public/transfer?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             storeName: storeName, name: staff.name, phone: staff.phone,
             date: today, oldLocation: activeRec.location || '', newLocation: newLoc

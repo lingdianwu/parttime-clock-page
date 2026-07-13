@@ -1,25 +1,23 @@
 // ============================================
-// Supabase 配置 — 替换为你的 Supabase 项目信息
+// 数据源配置 — GitHub Pages 版
 // ============================================
-var SUPABASE_CONFIG = {
-  url: 'https://YOUR_PROJECT.supabase.co',
-  anonKey: 'sb_publishable_YOUR_ANON_KEY'
-};
+window.DATA_BACKEND = 'mysql';
 
-var db = supabase.createClient(
-  SUPABASE_CONFIG.url,
-  SUPABASE_CONFIG.anonKey
-);
+// NAS PartTimeClock 后端公网地址
+var PTC_BASE = 'https://csjy.site/checkin-new/';
 
 // ============================================
-// 排班 API 配置
+// 排班 API（Project 系统）
 // ============================================
 var SCHEDULE_CONFIG = {
-  apiUrl: 'https://YOUR_SERVER_URL',
+  apiUrl: 'https://csjy.site',
   apiKey: 'YOUR_API_KEY'
 };
 
+var CHECKIN_BASE_URL = 'https://YOUR_USERNAME.github.io/parttime-clock-page/index.html';
+var SCHEDULE_PROXY_URL = 'https://csjy.site';
+
 // ============================================
-// 同步引擎（Edge Function）
+// 数据客户端
 // ============================================
-var EDGE_FUNCTION_URL = 'https://YOUR_PROJECT.supabase.co/functions/v1/sync-handler';
+var db = new PTCClient(PTC_BASE);

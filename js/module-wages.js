@@ -34,7 +34,7 @@
 
       var locApi = (SCHEDULE_CONFIG.apiUrl || '') + '/api/public/location?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey || 'schedule2026') + '&storeName=' + encodeURIComponent(storeName);
       Promise.all([
-        fetch(locApi, { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r) { return r.json(); }),
+        fetch(locApi).then(function(r) { return r.json(); }),
         db.from("location_wage").select("*").eq("store_id", sid).order("location")
       ]).then(function(results) {
         var locData = results[0] || {};

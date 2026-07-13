@@ -54,7 +54,7 @@
           var url = apiUrl + '/api/public/stores?key=' + encodeURIComponent(apiKey);
           return fetch(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: storeName })
           });
         }).then(function(r) { return r && r.json(); })
@@ -116,7 +116,7 @@
         var storeName = (sr.data && sr.data.schedule_store_name) || (sr.data && sr.data.name) || '';
         if (!storeName) { list.innerHTML = '<div style="color:#999">门店不存在</div>'; return; }
         var apiUrl = (SCHEDULE_CONFIG.apiUrl||'')+'/api/public/location?key='+encodeURIComponent(SCHEDULE_CONFIG.apiKey||'schedule2026')+'&storeName='+encodeURIComponent(storeName);
-        return fetch(apiUrl,{headers:{'ngrok-skip-browser-warning':'1'}}).then(function(r){return r.json();}).then(function(data){
+        return fetch(apiUrl).then(function(r){return r.json();}).then(function(data){
           var locs = data.locations || [];
           if (locs.length === 0) { list.innerHTML = '<div style="color:#999;padding:12px">暂无点位，请在下方添加</div>'; return; }
           list.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">' + locs.map(function(l){
@@ -140,7 +140,7 @@
       if (!store) { alert('门店不存在'); return; }
       Promise.all([
         fetch((SCHEDULE_CONFIG.apiUrl||'')+'/api/public/location?key='+encodeURIComponent(SCHEDULE_CONFIG.apiKey||'schedule2026'),{
-          method:'POST',headers:{'Content-Type':'application/json','ngrok-skip-browser-warning':'1'},
+          method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({storeName:store.schedule_store_name||store.name, location:name})
         }).then(function(r){return r.json();}),
         db.from('location_wage').upsert({store_id:sid, location:name, hourly_wage:18}, {onConflict:'store_id,location'})
@@ -155,7 +155,7 @@
       if (!store) return;
       Promise.all([
         fetch((SCHEDULE_CONFIG.apiUrl||'')+'/api/public/location?key='+encodeURIComponent(SCHEDULE_CONFIG.apiKey||'schedule2026'),{
-          method:'DELETE',headers:{'Content-Type':'application/json','ngrok-skip-browser-warning':'1'},
+          method:'DELETE',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({storeName:store.schedule_store_name||store.name, location:loc})
         }).then(function(r){return r.json();}),
         db.from('location_wage').delete().eq('store_id',sid).eq('location',loc)

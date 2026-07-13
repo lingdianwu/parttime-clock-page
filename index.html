@@ -67,9 +67,9 @@
     </div>
   </div>
 
-  <script src="js/supabase.min.js"></script>
+  <script src="js/api.js?v=1"></script>
   <script src="js/html5-qrcode.min.js"></script>
-  <script src="js/config.js"></script>
+  <script src="js/config.js?v=2"></script>
   <script>
   (function() {
     var storeId = getParam('store');
@@ -132,22 +132,38 @@
     }
 
     function loadStore() {
-      return db.from('store').select('*').eq('store_id', storeId).single()
+      function applyStore(row) {
+        storeId = row.store_id;
+        document.getElementById('storeName').textContent = row.name;
+        document.getElementById('storeTag').textContent = storeId;
+        storeLat = row.lat || null;
+        storeLng = row.lng || null;
+        gpsRadius = row.gps_radius || 200;
+        if (row.cutoff_hour != null) cutoffHour = row.cutoff_hour;
+        if (row.cutoff_minute != null) cutoffMinute = row.cutoff_minute;
+        scheduleStoreName = row.schedule_store_name || null;
+        if (scheduleStoreName) {
+          document.getElementById('scheduleStoreDisplay').textContent = scheduleStoreName;
+          document.getElementById('scheduleInfoBig').style.display = '';
+        }
+      }
+      return db.from('store').select('*').eq('store_id', storeId).maybeSingle()
         .then(function(_ref) {
-          if (_ref.error || !_ref.data) throw new Error('门店不存在');
-          document.getElementById('storeName').textContent = _ref.data.name;
-          document.getElementById('storeTag').textContent = storeId;
-          storeLat = _ref.data.lat || null;
-          storeLng = _ref.data.lng || null;
-          gpsRadius = _ref.data.gps_radius || 200;
-          if (_ref.data.cutoff_hour != null) cutoffHour = _ref.data.cutoff_hour;
-          if (_ref.data.cutoff_minute != null) cutoffMinute = _ref.data.cutoff_minute;
-          scheduleStoreName = _ref.data.schedule_store_name || null;
-          // 显示排班门店
-          if (scheduleStoreName) {
-            document.getElementById('scheduleStoreDisplay').textContent = scheduleStoreName;
-            document.getElementById('scheduleInfoBig').style.display = '';
+          if (_ref.error && _ref.error.code !== 'PGRST116') {
+            throw new Error('网络错误: ' + (_ref.error.message || '请检查网络后重试'));
           }
+          if (_ref.data) { applyStore(_ref.data); return; }
+          return db.from('store').select('*').order('store_id').then(function(allRef) {
+            if (allRef.error) throw new Error('网络错误: ' + (allRef.error.message || '请检查网络后重试'));
+            var wanted = String(storeId || '').trim();
+            var hit = (allRef.data || []).find(function(s) {
+              return s.store_id === wanted || s.name === wanted || s.schedule_store_name === wanted;
+            });
+            if (!hit) {
+              throw new Error('门店「' + wanted + '」不存在，请在后台重新下载二维码');
+            }
+            applyStore(hit);
+          });
         });
     }
 
@@ -160,8 +176,9 @@
             cutoffHour = (r.data.cutoff_hour != null) ? r.data.cutoff_hour : 2;
             cutoffMinute = (r.data.cutoff_minute != null) ? r.data.cutoff_minute : 0;
             scheduleApiUrl = r.data.schedule_api_url || SCHEDULE_CONFIG.apiUrl;
-            if (/github\.io$/i.test(location.hostname)) {
-              scheduleApiUrl = SCHEDULE_CONFIG.apiUrl;
+            if (location.protocol === 'https:' || /github\.io$/i.test(location.hostname)) {
+              scheduleApiUrl = (typeof SCHEDULE_PROXY_URL !== 'undefined' && SCHEDULE_PROXY_URL)
+                || SCHEDULE_CONFIG.apiUrl;
             }
             scheduleApiKey = r.data.schedule_api_key || SCHEDULE_CONFIG.apiKey;
           }
@@ -179,8 +196,7 @@
           if (_ref2.error) throw _ref2.error;
           phoneToName = {};
           phoneToMax = {};
-          phoneToDevice = {};
-(_ref2.data || []).forEach(function(r) {
+          (_ref2.data || []).forEach(function(r) {
             if (r.phone) {
               phoneToName[r.phone] = r.name;
               phoneToMax[r.phone] = (r.max_checkins != null) ? r.max_checkins : 3;
@@ -480,7 +496,7 @@
           '&date=' + day + '&storeName=' + encodeURIComponent(scheduleStoreName) + '&_=' + Date.now();
         var timeout = new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 8000); });
         return Promise.race([
-          fetch(url, { headers: { 'ngrok-skip-browser-warning': '1' }, cache: 'no-store' }).then(function(r) {
+          fetch(url, { , cache: 'no-store' }).then(function(r) {
             if (!r.ok) throw new Error('schedule api error');
             return r.json();
           }),
@@ -845,7 +861,7 @@
           { fps: 10, qrbox: { width: qrSize, height: qrSize } },
           function(decodedText) {
             stopScan();
-            if (/index\.html/.test(decodedText)) {
+            if (/[?&]store=/.test(decodedText)) {
               window.location.href = decodedText;
             } else {
               toast('请扫描门店打卡二维码', 'error');

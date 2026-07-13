@@ -130,7 +130,8 @@
           document.getElementById('secretInput').value = secret;
         }
 
-        var baseUrl = location.origin + location.pathname.replace(/admin\.html$/, 'index.html');
+        var baseUrl = (typeof CHECKIN_BASE_URL !== 'undefined' && CHECKIN_BASE_URL)
+          || (location.origin + location.pathname.replace(/admin\.html$/, 'index.html'));
         if (stores.length === 0) {
           document.getElementById('qrContainer').innerHTML = '<div class="empty-state">暂无门店</div>';
           return;

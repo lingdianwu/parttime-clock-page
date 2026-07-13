@@ -249,7 +249,7 @@
         });
 
         fetch(apiUrl + '/api/public/sync/push?key=' + encodeURIComponent(apiKey), {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ source: 'system_B', tables: { attendance: { upserted: upserted, deleted: [] } } })
         }).then(function(rr){return rr.json();}).then(function(data) {
           if (data.success) {
@@ -287,7 +287,7 @@
       if (!store) return;
       var storeName = store.schedule_store_name || store.name;
       var apiUrl = (SCHEDULE_CONFIG.apiUrl||'') + '/api/public/schedule?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey||'schedule2026') + '&date=' + date + '&storeName=' + encodeURIComponent(storeName);
-      fetch(apiUrl, { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r){return r.json();}).then(function(data){
+      fetch(apiUrl).then(function(r){return r.json();}).then(function(data){
         var now = new Date();
         var missing = [];
         (data.stores||[]).forEach(function(st){(st.locations||[]).forEach(function(loc){(loc.staff||[]).forEach(function(stf){
@@ -451,7 +451,7 @@
       msg.textContent = '查询排班中...'; msg.style.color = '#888';
       _addRecSched = null;
       var apiUrl = (SCHEDULE_CONFIG.apiUrl||'') + '/api/public/schedule?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey||'schedule2026') + '&date=' + date + '&storeName=' + encodeURIComponent(storeName);
-      fetch(apiUrl, { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r){return r.json();}).then(function(data){
+      fetch(apiUrl).then(function(r){return r.json();}).then(function(data){
         var found = null;
         (data.stores||[]).forEach(function(st){ (st.locations||[]).forEach(function(loc){ (loc.staff||[]).forEach(function(stf){
           if (String(stf.phone)===String(s.phone)) found = {loc:loc.location, ti:stf.timeIn, to:stf.timeOut, shift:stf.shiftType};
@@ -525,7 +525,7 @@
         var schedStoreName = store ? (store.schedule_store_name||store.name) : '';
         fetch((SCHEDULE_CONFIG.apiUrl||'') + '/api/public/schedule?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey||'schedule2026'), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ storeName: schedStoreName, name: name, phone: phone, date: date, timeIn: tin, timeOut: tout, location: loc||'', employmentType: '兼职' })
         }).catch(function(){});
         document.getElementById('addRecMsg').textContent = '添加成功'; document.getElementById('addRecMsg').style.color='#4caf50';
@@ -584,7 +584,7 @@
         dates.reduce(function(chain, date) {
           return chain.then(function() {
             var apiUrl = (SCHEDULE_CONFIG.apiUrl||'') + '/api/public/schedule?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey||'schedule2026') + '&date=' + date + '&storeName=' + encodeURIComponent(storeName);
-            return fetch(apiUrl, { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r){return r.json();}).then(function(data){
+            return fetch(apiUrl).then(function(r){return r.json();}).then(function(data){
               var staffMap = {};
               (data.stores||[]).forEach(function(st){ (st.locations||[]).forEach(function(loc){ (loc.staff||[]).forEach(function(stf){
                 staffMap[String(stf.phone)] = { ti: stf.timeIn, to: stf.timeOut, loc: loc.location, shift: stf.shiftType };
@@ -643,7 +643,7 @@
       if (!store) { alert('门店不存在'); return; }
       var storeName = store.schedule_store_name || store.name;
       var apiUrl = (SCHEDULE_CONFIG.apiUrl||'') + '/api/public/schedule?key=' + encodeURIComponent(SCHEDULE_CONFIG.apiKey||'schedule2026') + '&date=' + date + '&storeName=' + encodeURIComponent(storeName);
-      fetch(apiUrl, { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r){return r.json();}).then(function(data){
+      fetch(apiUrl).then(function(r){return r.json();}).then(function(data){
         var staffList = [];
         (data.stores||[]).forEach(function(st){(st.locations||[]).forEach(function(loc){(loc.staff||[]).forEach(function(stf){
           if (stf.phone) staffList.push({phone:String(stf.phone), location:loc.location});

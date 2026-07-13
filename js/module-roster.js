@@ -56,7 +56,7 @@
           if (!configUrl || !scheduleName) return false;
           var url = configUrl + '/api/public/roster/check-phone?key=' + encodeURIComponent(configKey) +
             '&storeName=' + encodeURIComponent(scheduleName) + '&phone=' + encodeURIComponent(phone);
-          return fetch(url, { headers: { 'ngrok-skip-browser-warning': '1' } })
+          return fetch(url)
             .then(function(r) { return r.json(); })
             .then(function(d) { return d && d.exists; })
             .catch(function() { return false; });
@@ -115,7 +115,7 @@
         var url = config.apiUrl + '/api/public/sync/push?key=' + encodeURIComponent(config.apiKey || '');
         return fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             source: 'system_B',
             tables: { roster: { upserted: upserted, deleted: deletedRows } }
@@ -285,7 +285,7 @@
         }
         var fetches = stores.map(function(s) {
           var url = apiUrl + '/api/public/roster?key=' + encodeURIComponent(apiKey);
-          return fetch(url, { headers: { 'ngrok-skip-browser-warning': '1' } }).then(function(r) { return r.json(); }).then(function(data) {
+          return fetch(url).then(function(r) { return r.json(); }).then(function(data) {
             return { storeId: s.store_id, scheduleName: s.schedule_store_name, data: data };
           }).catch(function() { return { storeId: s.store_id, error: true }; });
         });

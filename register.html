@@ -37,8 +37,8 @@
     <p style="color:#4caf50;margin-top:8px">你已加入花名册，可以扫码打卡了</p>
   </div>
 
-  <script src="js/supabase.min.js"></script>
-  <script src="js/config.js"></script>
+  <script src="js/api.js?v=1"></script>
+  <script src="js/config.js?v=2"></script>
   <script>
   var _pid = (function() {
     var s = location.search;
@@ -107,7 +107,7 @@
                 var apiKey = (cr.data && cr.data.schedule_api_key) || SCHEDULE_CONFIG.apiKey || '';
                 if (!apiUrl) return;
                 fetch(apiUrl + '/api/public/roster/sync?key=' + encodeURIComponent(apiKey), {
-                  method: 'POST', headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ storeName: schedName, staff: [{ name: name, phone: phone, employmentType: '兼职' }] })
                 }).catch(function(){});
               }).catch(function(){});

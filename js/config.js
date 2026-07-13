@@ -1,25 +1,27 @@
 // ============================================
-// Supabase 配置
+// 数据源配置
+// GitHub Pages 静态页 → NAS PartTimeClock MySQL API
 // ============================================
-var SUPABASE_CONFIG = {
-  url: 'https://ciaddvqgcvpunemxoqmf.supabase.co',
-  anonKey: 'sb_publishable_l2RM-Kf61YzSI65npYcnWg_ITK5Yf1U'
-};
+window.DATA_BACKEND = 'mysql';
 
-var db = supabase.createClient(
-  SUPABASE_CONFIG.url,
-  SUPABASE_CONFIG.anonKey
-);
+// NAS 打卡后端（Caddy 反代 /checkin-new → PartTimeClock Node.js）
+var PTC_BASE = 'https://csjy.site/checkin-new/';
 
 // ============================================
-// 排班 API 配置（从 app_config 加载）
+// 排班 API（对接 Project）
 // ============================================
 var SCHEDULE_CONFIG = {
-  apiUrl: 'https://ciaddvqgcvpunemxoqmf.supabase.co/functions/v1/schedule-proxy',
+  apiUrl: 'https://csjy.site',
   apiKey: 'schedule2026'
 };
 
+var CHECKIN_BASE_URL = 'https://lingdianwu.github.io/parttime-clock-page/index.html';
+var SCHEDULE_PROXY_URL = 'https://csjy.site';
+
 // ============================================
-// 同步引擎（Edge Function）
+// 数据客户端（PTCClient 替代 Supabase SDK）
 // ============================================
-var EDGE_FUNCTION_URL = 'https://ciaddvqgcvpunemxoqmf.supabase.co/functions/v1/sync-handler';
+if (typeof PTCClient === 'undefined') {
+  console.error('[config] DATA_BACKEND=mysql 但未加载 api.js');
+}
+var db = new PTCClient(PTC_BASE);
